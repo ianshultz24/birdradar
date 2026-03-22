@@ -1,26 +1,101 @@
 @import "tailwindcss";
 
 :root {
-  --background: #ffffff;
-  --foreground: #171717;
+  --background: #0a0e14;
+  --foreground: #ccddef;
 }
 
-@theme inline {
-  --color-background: var(--background);
-  --color-foreground: var(--foreground);
-  --font-sans: var(--font-geist-sans);
-  --font-mono: var(--font-geist-mono);
+html,
+body {
+  height: 100%;
+  margin: 0;
+  padding: 0;
+  background: var(--background);
+  color: var(--foreground);
+  font-family: var(--font-dm-sans, sans-serif);
+  overflow: hidden;
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
+/* ─── Pulse animations: blue for rare lifers, white for rare seen ─── */
+@keyframes birdPulseBlue {
+  0%, 100% {
+    box-shadow: 0 0 6px #60a5fa, 0 0 14px rgba(96,165,250,0.4);
+    transform: scale(1);
+  }
+  50% {
+    box-shadow: 0 0 14px #60a5fa, 0 0 28px rgba(96,165,250,0.6), 0 0 42px rgba(96,165,250,0.2);
+    transform: scale(1.35);
   }
 }
 
-body {
-  background: var(--background);
-  color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+@keyframes birdPulseWhite {
+  0%, 100% {
+    box-shadow: 0 0 6px #e2e8f0, 0 0 14px rgba(226,232,240,0.4);
+    transform: scale(1);
+  }
+  50% {
+    box-shadow: 0 0 14px #e2e8f0, 0 0 28px rgba(226,232,240,0.6), 0 0 42px rgba(226,232,240,0.2);
+    transform: scale(1.35);
+  }
+}
+
+.bird-pulse-blue  { animation: birdPulseBlue  1.8s ease-in-out infinite; }
+.bird-pulse-white { animation: birdPulseWhite 1.8s ease-in-out infinite; }
+
+/* ─── Leaflet popup overrides ─── */
+.bird-popup .leaflet-popup-content-wrapper {
+  background: #111820;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 7px;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.6);
+  padding: 0;
+}
+
+.bird-popup .leaflet-popup-content {
+  margin: 12px 14px;
+  color: #ccddef;
+}
+
+.bird-popup .leaflet-popup-tip-container {
+  display: none;
+}
+
+.bird-popup .leaflet-popup-close-button {
+  color: #445566;
+  font-size: 16px;
+  top: 6px;
+  right: 8px;
+}
+
+.bird-popup .leaflet-popup-close-button:hover {
+  color: #8899aa;
+}
+
+/* ─── Custom scrollbar ─── */
+::-webkit-scrollbar {
+  width: 4px;
+  height: 4px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.1);
+  border-radius: 2px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(255, 255, 255, 0.2);
+}
+
+/* ─── Leaflet map background ─── */
+.leaflet-container {
+  background: #0a0e14 !important;
+}
+
+/* ─── Remove Leaflet default icon shadows that reference missing images ─── */
+.leaflet-marker-shadow {
+  display: none;
 }
