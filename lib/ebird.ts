@@ -52,6 +52,7 @@ export interface AppSettings {
   notificationsEnabled: boolean;
   soundEnabled: boolean;
   showRadiusCircle: boolean;
+  showRadarAnimation: boolean;
 }
 
 export const DEFAULT_SETTINGS: AppSettings = {
@@ -65,6 +66,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
   notificationsEnabled: false,
   soundEnabled: false,
   showRadiusCircle: false,
+  showRadarAnimation: false,
 };
 
 export function timeAgo(dateStr: string): string {

@@ -7,6 +7,7 @@ import Sidebar from '@/components/Sidebar';
 import StatusBar from '@/components/StatusBar';
 import NotificationToast, { type ToastItem } from '@/components/NotificationToast';
 
+import { useMobile } from '@/hooks/useMobile';
 import { mergeObservations, DEFAULT_SETTINGS } from '@/lib/ebird';
 import type { Observation, Hotspot, ClassifiedObservation, AppSettings, TargetSpecies } from '@/lib/ebird';
 import { classifyAll } from '@/lib/classify';
@@ -122,6 +123,8 @@ export default function Home() {
   const [lastFetch, setLastFetch] = useState(0);
   const [focusedSpecies, setFocusedSpecies] = useState<{ code: string; name: string } | null>(null);
   const [toasts, setToasts] = useState<ToastItem[]>([]);
+  const isMobile = useMobile();
+  const [drawerOpen, setDrawerOpen] = useState(false);
 
   const lastFetchRef = useRef(0);
   const settingsRef = useRef(settings);
@@ -493,6 +496,21 @@ export default function Home() {
     saveLifeListMeta(newMeta);
   }
 
+  type Tab = 'alerts' | 'lifelist' | 'settings';
+
+  function handleTabChange(tab: Tab) {
+    if (isMobile) {
+      if (tab === activeTab && drawerOpen) {
+        setDrawerOpen(false);
+      } else {
+        setActiveTab(tab);
+        setDrawerOpen(true);
+      }
+    } else {
+      setActiveTab(tab);
+    }
+  }
+
   function handleSettingsChange(s: AppSettings) {
     setSettings(s);
     saveSettings(s);
@@ -524,7 +542,9 @@ export default function Home() {
     >
       <Sidebar
         activeTab={activeTab}
-        onTabChange={setActiveTab}
+        onTabChange={handleTabChange}
+        isMobile={isMobile}
+        drawerOpen={drawerOpen}
         observations={observations}
         hotspots={hotspots}
         lifeList={lifeList}
@@ -560,9 +580,11 @@ export default function Home() {
           lastFetch={lastFetch}
           lightMode={lm}
           yearListActive={settings.yearListActive}
+          isMobile={isMobile}
         />
         <BirdMap
           center={center}
+          isMobile={isMobile}
           observations={observations}
           hotspots={hotspots}
           flyToTarget={flyToTarget}

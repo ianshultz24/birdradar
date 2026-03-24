@@ -65,6 +65,12 @@ export default function SettingsPanel({
           onChange={(v) => set('showRadiusCircle', v)}
           labelColor={labelColor}
         />
+        <Toggle
+          label="Radar animation"
+          checked={settings.showRadarAnimation}
+          onChange={(v) => set('showRadarAnimation', v)}
+          labelColor={labelColor}
+        />
       </SettingsGroup>
 
       {/* Search radius (miles) */}

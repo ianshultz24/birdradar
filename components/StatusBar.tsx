@@ -9,9 +9,10 @@ interface Props {
   lastFetch: number;
   lightMode: boolean;
   yearListActive: boolean;
+  isMobile?: boolean;
 }
 
-export default function StatusBar({ observations, loading, apiStatus, lastFetch, lightMode, yearListActive }: Props) {
+export default function StatusBar({ observations, loading, apiStatus, lastFetch, lightMode, yearListActive, isMobile }: Props) {
   const total = observations.length;
   const uniqueSpecies = new Set(observations.map((o) => o.speciesCode)).size;
   const liferOps = observations.filter(
@@ -22,6 +23,60 @@ export default function StatusBar({ observations, loading, apiStatus, lastFetch,
     lastFetch > 0
       ? new Date(lastFetch).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
       : '—';
+
+  if (isMobile) {
+    // Compact single-row format for mobile
+    const statusDot = (
+      <span
+        style={{
+          width: 6,
+          height: 6,
+          borderRadius: '50%',
+          background:
+            loading
+              ? '#f5a623'
+              : apiStatus === 'ok'
+              ? '#3ecfb4'
+              : apiStatus === 'error'
+              ? '#ef4444'
+              : '#4b5563',
+          display: 'inline-block',
+          flexShrink: 0,
+          boxShadow: apiStatus === 'ok' && !loading ? '0 0 4px #3ecfb4' : undefined,
+        }}
+      />
+    );
+
+    return (
+      <div
+        style={{
+          position: 'absolute',
+          top: 10,
+          left: '50%',
+          transform: 'translateX(-50%)',
+          zIndex: 1000,
+          display: 'flex',
+          alignItems: 'center',
+          gap: 8,
+          background: lightMode ? 'rgba(240,244,248,0.92)' : 'rgba(10,14,20,0.88)',
+          border: lightMode ? '1px solid rgba(0,0,0,0.1)' : '1px solid rgba(255,255,255,0.08)',
+          borderRadius: 6,
+          backdropFilter: 'blur(8px)',
+          padding: '4px 10px',
+          fontFamily: 'var(--font-jb-mono, monospace)',
+          fontSize: 10,
+          whiteSpace: 'nowrap',
+          boxShadow: '0 2px 12px rgba(0,0,0,0.4)',
+        }}
+      >
+        {statusDot}
+        <span style={{ color: '#aabbcc' }}>
+          <span style={{ color: '#f5a623', fontWeight: 700 }}>{liferOps}</span>
+          {' '}new · {uniqueSpecies} spp · {total} obs
+        </span>
+      </div>
+    );
+  }
 
   return (
     <div

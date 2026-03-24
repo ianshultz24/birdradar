@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   MapContainer,
   TileLayer,
@@ -16,6 +16,8 @@ import type { ClassifiedObservation, Hotspot } from '@/lib/ebird';
 import type { AppSettings } from '@/lib/ebird';
 import { timeAgo } from '@/lib/ebird';
 import { getTierMapColor } from '@/lib/classify';
+import RadarOverlay from './RadarOverlay';
+import RadarPositionSync from './RadarPositionSync';
 
 // ─── Heatmap color helper ─────────────────────────────────────────────────────
 
@@ -532,6 +534,7 @@ export interface MapProps {
   pinLocation: [number, number] | null;
   userLocation: [number, number] | null;
   focusedSpecies: { code: string; name: string } | null;
+  isMobile?: boolean;
   onAddToLifeList: (code: string, name: string, sciName?: string, date?: string, location?: string) => void;
   onHotspotDetail: (hs: Hotspot) => void;
   onPinDrop: (lat: number, lng: number) => void;
@@ -548,6 +551,7 @@ export default function BirdMap({
   pinLocation,
   userLocation,
   focusedSpecies,
+  isMobile,
   onAddToLifeList,
   onHotspotDetail,
   onPinDrop,
@@ -555,6 +559,13 @@ export default function BirdMap({
 }: MapProps) {
   const [isPinMode, setIsPinMode] = useState(false);
   const [reCenterTrigger, setReCenterTrigger] = useState(0);
+  const [radarCenter, setRadarCenter] = useState({ x: 0, y: 0 });
+  const [radarRadiusPx, setRadarRadiusPx] = useState(0);
+
+  const handleRadarUpdate = useCallback((x: number, y: number, r: number) => {
+    setRadarCenter({ x, y });
+    setRadarRadiusPx(r);
+  }, []);
   const reCenterTarget: [number, number] = userLocation ?? center;
 
   function handleMapClick(lat: number, lng: number) {
@@ -607,6 +618,15 @@ export default function BirdMap({
       <RecenterController target={reCenterTarget} trigger={reCenterTrigger} />
       <MapClickHandler active={isPinMode} onMapClick={handleMapClick} />
       <CursorController isPinMode={isPinMode} />
+
+      {/* Radar position sync — must be inside MapContainer for useMap() access */}
+      {settings.showRadarAnimation && (
+        <RadarPositionSync
+          geoCenter={pinLocation ?? center}
+          radiusKm={settings.searchRadius}
+          onUpdate={handleRadarUpdate}
+        />
+      )}
 
       {/* Radius circle — search boundary outline only, no fill */}
       {settings.showRadiusCircle && (
@@ -734,11 +754,21 @@ export default function BirdMap({
       )}
     </MapContainer>
 
+    {/* Radar canvas overlay — rendered outside MapContainer so it's a true DOM overlay */}
+    {settings.showRadarAnimation && radarRadiusPx >= 20 && (
+      <RadarOverlay
+        centerX={radarCenter.x}
+        centerY={radarCenter.y}
+        radiusPx={radarRadiusPx}
+        enabled={settings.showRadarAnimation}
+      />
+    )}
+
     {/* Pin drop overlay controls */}
     <div
       style={{
         position: 'absolute',
-        bottom: 30,
+        bottom: isMobile ? 86 : 30,
         right: 10,
         zIndex: 1001,
         display: 'flex',
