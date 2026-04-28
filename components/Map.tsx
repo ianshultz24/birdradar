@@ -15,9 +15,53 @@ import L from 'leaflet';
 import type { ClassifiedObservation, Hotspot } from '@/lib/ebird';
 import type { AppSettings } from '@/lib/ebird';
 import { timeAgo } from '@/lib/ebird';
-import { getTierMapColor } from '@/lib/classify';
+import { getTheme, tierTokens, tierLabel } from '@/lib/theme';
+import { RefreshCwIcon, CrosshairIcon, MapPinIcon, XIcon } from '@/components/Icons';
 import RadarOverlay from './RadarOverlay';
 import RadarPositionSync from './RadarPositionSync';
+
+// ─── Tier colors for DivIcon HTML strings (CSS vars can't be used in html strings) ───
+const TIER_COLORS_LIGHT = {
+  'lifer-rare': '#DC2626',  // red — lifer + eBird notable (highest urgency)
+  'lifer':      '#059669',  // green — new species
+  'rare':       '#DC2626',  // red — eBird notable, already seen
+  'seen':       '#9CA3AF',  // gray — previously seen
+} as const;
+
+const TIER_COLORS_DARK = {
+  'lifer-rare': '#F87171',  // red
+  'lifer':      '#34D399',  // green
+  'rare':       '#F87171',  // red
+  'seen':       '#71717A',  // gray
+} as const;
+
+// Per-tier glow colors injected as CSS variables into the DivIcon HTML
+const TIER_GLOW_LO_LIGHT: Record<string, string> = {
+  'lifer-rare': '0 2px 4px rgba(220,38,38,0.28)',
+  'lifer':      '0 2px 4px rgba(5,150,105,0.28)',
+  'rare':       '0 2px 4px rgba(220,38,38,0.22)',
+  'seen':       '0 2px 3px rgba(0,0,0,0)',
+};
+const TIER_GLOW_HI_LIGHT: Record<string, string> = {
+  'lifer-rare': '0 4px 10px rgba(220,38,38,0.50)',
+  'lifer':      '0 4px 10px rgba(5,150,105,0.50)',
+  'rare':       '0 4px 10px rgba(220,38,38,0.40)',
+  'seen':       '0 4px 8px rgba(0,0,0,0)',
+};
+const TIER_GLOW_LO_DARK: Record<string, string> = {
+  'lifer-rare': '0 2px 4px rgba(248,113,113,0.35)',
+  'lifer':      '0 2px 4px rgba(52,211,153,0.35)',
+  'rare':       '0 2px 4px rgba(248,113,113,0.28)',
+  'seen':       '0 2px 3px rgba(0,0,0,0)',
+};
+const TIER_GLOW_HI_DARK: Record<string, string> = {
+  'lifer-rare': '0 4px 12px rgba(248,113,113,0.55)',
+  'lifer':      '0 4px 12px rgba(52,211,153,0.55)',
+  'rare':       '0 4px 12px rgba(248,113,113,0.46)',
+  'seen':       '0 4px 8px rgba(0,0,0,0)',
+};
+
+type TierKey = keyof typeof TIER_COLORS_LIGHT;
 
 // ─── Heatmap color helper ─────────────────────────────────────────────────────
 
@@ -37,96 +81,99 @@ function lerpColor(a: string, b: string, t: number): string {
 }
 
 function hotspotHeatColor(ratio: number): string {
-  // 0.0 → gray, 0.33 → gold, 0.66 → orange, 1.0 → red
   if (ratio < 0.33) return lerpColor('#556677', '#f5a623', ratio / 0.33);
   if (ratio < 0.66) return lerpColor('#f5a623', '#ff7043', (ratio - 0.33) / 0.33);
   return lerpColor('#ff7043', '#ef4444', (ratio - 0.66) / 0.34);
 }
 
-// ─── Tier sort order (lower = higher priority) ────────────────────────────
-const TIER_ORDER: Record<string, number> = { 'lifer-rare': 0, 'lifer': 1, 'rare': 2, 'seen': 3 };
+// ─── Tier sort order ──────────────────────────────────────────────────────────
+const TIER_ORDER: Record<string, number> = { 'lifer-rare': 0, lifer: 1, rare: 2, seen: 3 };
 
-// ─── Icon factories ────────────────────────────────────────────────────────
+// ─── Bird pin icon (teardrop SVG, anchored at tip) ────────────────────────────
 
-function birdIcon(
+function birdPinIcon(
   tier: ClassifiedObservation['tier'],
   pulse: boolean,
   opacity: number,
   focused = false,
   lightMode = false,
 ): L.DivIcon {
-  const isSeenTier = tier === 'seen' || tier === 'rare';
-  const isRareTier = tier === 'lifer-rare' || tier === 'rare';
+  const tc = lightMode ? TIER_COLORS_LIGHT : TIER_COLORS_DARK;
+  const color = tc[tier as TierKey] ?? tc.seen;
+  const dotBg = lightMode ? '#FFFFFF' : '#111113';
 
-  // Map dot color: white-ish for seen tiers, blue for lifer tiers
-  const color = getTierMapColor(tier, lightMode);
+  // Bigger pins for high-priority tiers
+  const sizes: Record<string, [number, number]> = {
+    'lifer-rare': [20, 28],
+    lifer:        [18, 25],
+    rare:         [16, 22],
+    seen:         [14, 19],
+  };
+  const [w, h] = sizes[tier] ?? [14, 19];
 
-  const baseSize = isRareTier ? 14 : 10;
-  const size = focused ? baseSize + 4 : baseSize;
+  const shouldPulse = pulse && (tier === 'lifer-rare' || tier === 'lifer');
+  const pulseClass = shouldPulse ? 'bird-pin-pulse' : '';
 
-  // Glow: softer for white markers, brighter for blue
-  const glow = isSeenTier
-    ? (lightMode
-        ? `0 0 5px rgba(100,116,139,0.4)`
-        : `0 0 8px rgba(226,232,240,0.5), 0 0 16px rgba(226,232,240,0.25)`)
-    : (isRareTier
-        ? `0 0 10px ${color}, 0 0 20px ${color}66`
-        : `0 0 6px ${color}88`);
+  const glowLoTable = lightMode ? TIER_GLOW_LO_LIGHT : TIER_GLOW_LO_DARK;
+  const glowHiTable = lightMode ? TIER_GLOW_HI_LIGHT : TIER_GLOW_HI_DARK;
+  const glowLo = glowLoTable[tier] ?? glowLoTable.seen;
+  const glowHi = glowHiTable[tier] ?? glowHiTable.seen;
 
-  // Pulse class: blue for rare lifers, white for rare seen
-  const pulseClass = pulse && isRareTier
-    ? (isSeenTier ? ' bird-pulse-white' : ' bird-pulse-blue')
+  // Outer focus ring drawn inside the SVG viewBox
+  const focusRing = focused
+    ? `<circle cx="10" cy="9.5" r="6.5" fill="none" stroke="${color}" stroke-width="1.5" opacity="0.45"/>`
     : '';
-
-  const ring = focused ? `outline:2px solid ${color};outline-offset:2px;` : '';
-  const border = isSeenTier
-    ? `1.5px solid ${lightMode ? 'rgba(100,116,139,0.4)' : 'rgba(226,232,240,0.25)'}`
-    : `1.5px solid ${color}cc`;
 
   return L.divIcon({
     className: '',
-    html: `<div class="bird-marker${pulseClass}" style="width:${size}px;height:${size}px;border-radius:50%;background:${color};box-shadow:${glow};opacity:${opacity};border:${border};${ring}"></div>`,
+    html: `<div class="${pulseClass}" style="display:inline-block;transform-origin:50% 100%;opacity:${opacity};--pin-glow-lo:${glowLo};--pin-glow-hi:${glowHi}"><svg width="${w}" height="${h}" viewBox="0 0 20 28" fill="none" overflow="visible"><path d="M10 0C4.5 0 0 4.5 0 10c0 7 10 18 10 18s10-11 10-18C20 4.5 15.5 0 10 0z" fill="${color}" opacity="${focused ? 1 : 0.88}"/>${focusRing}<circle cx="10" cy="9.5" r="3.5" fill="${dotBg}" opacity="0.88"/></svg></div>`,
+    iconSize: [w, h],
+    iconAnchor: [Math.round(w / 2), h],
+    popupAnchor: [0, -(h + 4)],
+  });
+}
+
+// ─── Hotspot dot icon (circle, heatmap colored) ───────────────────────────────
+
+function hotspotIcon(ratio: number): L.DivIcon {
+  const color = hotspotHeatColor(ratio);
+  const size = 10;
+  return L.divIcon({
+    className: '',
+    html: `<div style="width:${size}px;height:${size}px;border-radius:50%;background:${color};opacity:0.88;box-shadow:0 1px 4px rgba(0,0,0,0.28);border:1.5px solid rgba(255,255,255,0.45);"></div>`,
     iconSize: [size, size],
     iconAnchor: [size / 2, size / 2],
     popupAnchor: [0, -(size / 2 + 4)],
   });
 }
 
-function hotspotIcon(ratio: number): L.DivIcon {
-  const color = hotspotHeatColor(ratio);
-  const size = 14;
-  return L.divIcon({
-    className: '',
-    html: `<div style="width:${size}px;height:${size}px;background:${color};transform:rotate(45deg);border:1px solid rgba(255,255,255,0.35);box-shadow:0 0 7px ${color}99;"></div>`,
-    iconSize: [size, size],
-    iconAnchor: [size / 2, size / 2],
-    popupAnchor: [0, -10],
-  });
-}
+// ─── User location dot ────────────────────────────────────────────────────────
 
 function userLocationIcon(): L.DivIcon {
   const size = 16;
   return L.divIcon({
     className: '',
-    html: `<div style="width:${size}px;height:${size}px;border-radius:50%;background:#3b82f6;border:3px solid #fff;box-shadow:0 0 0 2px #3b82f6,0 0 12px #3b82f688;"></div>`,
+    html: `<div style="width:${size}px;height:${size}px;border-radius:50%;background:#3b82f6;border:3px solid #fff;box-shadow:0 0 0 2px rgba(59,130,246,0.35),0 2px 8px rgba(0,0,0,0.2);"></div>`,
     iconSize: [size, size],
     iconAnchor: [size / 2, size / 2],
     popupAnchor: [0, -(size / 2 + 4)],
   });
 }
 
+// ─── Drop-pin marker (amber, indicates custom search center) ──────────────────
+
 function pinDropIcon(): L.DivIcon {
-  const size = 22;
+  const w = 20, h = 28;
   return L.divIcon({
     className: '',
-    html: `<div style="width:${size}px;height:${size}px;background:#f5a623;transform:rotate(45deg);border:2px solid rgba(255,255,255,0.8);box-shadow:0 0 14px #f5a62399,0 2px 8px rgba(0,0,0,0.5);"></div>`,
-    iconSize: [size, size],
-    iconAnchor: [size / 2, size / 2],
-    popupAnchor: [0, -14],
+    html: `<svg width="${w}" height="${h}" viewBox="0 0 20 28" fill="none" overflow="visible"><path d="M10 0C4.5 0 0 4.5 0 10c0 7 10 18 10 18s10-11 10-18C20 4.5 15.5 0 10 0z" fill="#F59E0B" opacity="0.9"/><circle cx="10" cy="9.5" r="3.5" fill="white" opacity="0.88"/></svg>`,
+    iconSize: [w, h],
+    iconAnchor: [w / 2, h],
+    popupAnchor: [0, -(h + 6)],
   });
 }
 
-// ─── RecenterController: fires flyTo when trigger increments ─────────────────
+// ─── RecenterController ───────────────────────────────────────────────────────
 
 function RecenterController({ target, trigger }: { target: [number, number]; trigger: number }) {
   const map = useMap();
@@ -140,7 +187,7 @@ function RecenterController({ target, trigger }: { target: [number, number]; tri
   return null;
 }
 
-// ─── MapClickHandler: captures map clicks in pin-drop mode ──────────────────
+// ─── MapClickHandler ──────────────────────────────────────────────────────────
 
 function MapClickHandler({ active, onMapClick }: { active: boolean; onMapClick: (lat: number, lng: number) => void }) {
   useMapEvents({
@@ -151,7 +198,7 @@ function MapClickHandler({ active, onMapClick }: { active: boolean; onMapClick: 
   return null;
 }
 
-// ─── CursorController: sets map cursor based on pin mode ─────────────────────
+// ─── CursorController ─────────────────────────────────────────────────────────
 
 function CursorController({ isPinMode }: { isPinMode: boolean }) {
   const map = useMap();
@@ -161,7 +208,7 @@ function CursorController({ isPinMode }: { isPinMode: boolean }) {
   return null;
 }
 
-// ─── MapController: drives flyTo ────────────────────────────────────────────
+// ─── MapController ────────────────────────────────────────────────────────────
 
 function MapController({ target }: { target: [number, number] | null }) {
   const map = useMap();
@@ -181,7 +228,7 @@ function MapController({ target }: { target: [number, number] | null }) {
   return null;
 }
 
-// ─── Observation Popup ───────────────────────────────────────────────────────
+// ─── Observation Popup ────────────────────────────────────────────────────────
 
 function ObsPopup({
   obs,
@@ -198,6 +245,10 @@ function ObsPopup({
   const [addDate, setAddDate] = useState('');
   const [addLoc, setAddLoc] = useState('');
 
+  const t = getTheme(lightMode);
+  const tc = tierTokens(obs.tier, t);
+  const label = tierLabel(obs.tier);
+
   function openForm() {
     setAddDate(obs.obsDt.split(' ')[0]);
     setAddLoc(obs.locName);
@@ -208,134 +259,80 @@ function ObsPopup({
     onAddToLifeList(obs.speciesCode, obs.comName, obs.sciName, addDate, addLoc);
     setShowAddForm(false);
   }
-  const tierColors: Record<string, string> = {
-    'lifer-rare': '#60a5fa',
-    'lifer':      '#60a5fa',
-    'rare':       '#94a3b8',
-    'seen':       '#6b7280',
+
+  const inputStyle: React.CSSProperties = {
+    width: '100%', padding: '5px 8px',
+    background: t.bg2, border: `1px solid ${t.line2}`,
+    borderRadius: 5, color: t.fg0, fontSize: 12,
+    outline: 'none', boxSizing: 'border-box',
+    fontFamily: t.sans,
   };
-  const tierLabels: Record<string, string> = {
-    'lifer-rare': 'LIFER + RARE',
-    'lifer':      'LIFER',
-    'rare':       'RARE SEEN',
-    'seen':       'SEEN',
-  };
-  const color = tierColors[obs.tier];
-  const textPrimary = lightMode ? '#1a2332' : '#f0f4f8';
-  const textSecondary = lightMode ? '#4a5568' : '#8899aa';
-  const textMuted = lightMode ? '#718096' : '#aabbcc';
 
   return (
-    <div style={{ fontFamily: 'var(--font-dm-sans, sans-serif)', minWidth: 200, maxWidth: 260 }}>
-      <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 6 }}>
-        <span
-          style={{
-            fontSize: 10,
-            fontFamily: 'var(--font-jb-mono, monospace)',
-            background: color + '22',
-            color,
-            border: `1px solid ${color}44`,
-            borderRadius: 3,
-            padding: '1px 5px',
-            letterSpacing: '0.08em',
-          }}
-        >
-          {tierLabels[obs.tier]}
-        </span>
+    <div style={{ fontFamily: t.sans, minWidth: 210, maxWidth: 270 }}>
+      {/* Tier badge */}
+      <div style={{ marginBottom: 7 }}>
+        <span style={{
+          fontSize: 9.5, fontWeight: 700, fontFamily: t.mono,
+          background: tc.bg, color: tc.color,
+          border: `1px solid ${tc.border}`,
+          borderRadius: 4, padding: '2px 6px', letterSpacing: '0.04em',
+        }}>{label}</span>
       </div>
-      <div style={{ fontSize: 15, fontWeight: 600, color: textPrimary, marginBottom: 2 }}>
+
+      {/* Species name */}
+      <div style={{ fontSize: 15, fontWeight: 700, color: t.fg0, fontFamily: t.display, marginBottom: 2, lineHeight: 1.25 }}>
         {obs.comName}
       </div>
-      <div style={{ fontSize: 12, color: textSecondary, fontStyle: 'italic', marginBottom: 8 }}>
+      <div style={{ fontSize: 12, color: t.fg2, fontStyle: 'italic', marginBottom: 10 }}>
         {obs.sciName}
       </div>
-      <div style={{ fontSize: 12, color: textMuted, marginBottom: 3 }}>
-        📍 {obs.locName}
+
+      {/* Location + meta */}
+      <div style={{ fontSize: 12, color: t.fg2, marginBottom: 4, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+        {obs.locName}
       </div>
-      <div
-        style={{
-          display: 'flex',
-          gap: 12,
-          fontSize: 12,
-          color: textSecondary,
-          fontFamily: 'var(--font-jb-mono, monospace)',
-          marginBottom: obs.reportCount && obs.reportCount > 1 ? 4 : 10,
-        }}
-      >
+      <div style={{
+        display: 'flex', gap: 12, fontSize: 12, color: t.fg3,
+        fontFamily: t.mono,
+        marginBottom: obs.reportCount && obs.reportCount > 1 ? 4 : 12,
+      }}>
         <span>{obs.howMany ? `${obs.howMany}×` : '1×'}</span>
         <span>{timeAgo(obs.obsDt)}</span>
       </div>
       {obs.reportCount && obs.reportCount > 1 && (
-        <div style={{ fontSize: 11, color: textMuted, fontFamily: 'var(--font-jb-mono, monospace)', marginBottom: 10 }}>
+        <div style={{ fontSize: 11, color: t.fg3, fontFamily: t.mono, marginBottom: 12 }}>
           Reported {obs.reportCount}× this week here
         </div>
       )}
+
+      {/* Add to life list */}
       {!isOnLifeList ? (
         !showAddForm ? (
           <button
             onClick={openForm}
             style={{
-              width: '100%',
-              padding: '6px 0',
-              background: 'rgba(245,166,35,0.15)',
-              border: '1px solid rgba(245,166,35,0.4)',
-              borderRadius: 4,
-              color: '#f5a623',
-              fontSize: 12,
-              fontWeight: 600,
-              cursor: 'pointer',
-              letterSpacing: '0.04em',
+              width: '100%', padding: '7px 0',
+              background: t.accentBg, border: `1px solid ${t.accentBorder}`,
+              borderRadius: 6, color: t.accent,
+              fontSize: 12, fontWeight: 600, cursor: 'pointer',
+              fontFamily: t.sans,
             }}
           >
             + Add to Life List
           </button>
         ) : (
           <div style={{ display: 'flex', flexDirection: 'column', gap: 5 }}>
-            <input
-              type="date"
-              value={addDate}
-              onChange={(e) => setAddDate(e.target.value)}
-              style={{
-                width: '100%',
-                padding: '5px 8px',
-                background: lightMode ? 'rgba(0,0,0,0.04)' : 'rgba(255,255,255,0.08)',
-                border: `1px solid ${lightMode ? 'rgba(0,0,0,0.15)' : 'rgba(255,255,255,0.15)'}`,
-                borderRadius: 4,
-                color: lightMode ? '#1a2332' : '#ddeeff',
-                fontSize: 12,
-                boxSizing: 'border-box',
-              }}
-            />
-            <input
-              type="text"
-              value={addLoc}
-              onChange={(e) => setAddLoc(e.target.value)}
-              placeholder="Location"
-              style={{
-                width: '100%',
-                padding: '5px 8px',
-                background: lightMode ? 'rgba(0,0,0,0.04)' : 'rgba(255,255,255,0.08)',
-                border: `1px solid ${lightMode ? 'rgba(0,0,0,0.15)' : 'rgba(255,255,255,0.15)'}`,
-                borderRadius: 4,
-                color: lightMode ? '#1a2332' : '#ddeeff',
-                fontSize: 12,
-                outline: 'none',
-                boxSizing: 'border-box',
-              }}
-            />
+            <input type="date" value={addDate} onChange={e => setAddDate(e.target.value)} style={inputStyle}/>
+            <input type="text" value={addLoc} onChange={e => setAddLoc(e.target.value)} placeholder="Location" style={inputStyle}/>
             <div style={{ display: 'flex', gap: 5 }}>
               <button
                 onClick={confirmAdd}
                 style={{
-                  flex: 1,
-                  padding: '5px 0',
-                  background: 'rgba(245,166,35,0.2)',
-                  border: '1px solid rgba(245,166,35,0.5)',
-                  borderRadius: 4,
-                  color: '#f5a623',
-                  fontSize: 11,
-                  fontWeight: 700,
-                  cursor: 'pointer',
+                  flex: 1, padding: '5px 0',
+                  background: t.accentBg, border: `1px solid ${t.accentBorder}`,
+                  borderRadius: 5, color: t.accent,
+                  fontSize: 11, fontWeight: 700, cursor: 'pointer', fontFamily: t.sans,
                 }}
               >
                 ✓ Confirm
@@ -344,12 +341,8 @@ function ObsPopup({
                 onClick={() => setShowAddForm(false)}
                 style={{
                   padding: '5px 10px',
-                  background: 'transparent',
-                  border: `1px solid ${lightMode ? 'rgba(0,0,0,0.15)' : 'rgba(255,255,255,0.15)'}`,
-                  borderRadius: 4,
-                  color: lightMode ? '#718096' : '#8899aa',
-                  fontSize: 11,
-                  cursor: 'pointer',
+                  background: 'transparent', border: `1px solid ${t.line2}`,
+                  borderRadius: 5, color: t.fg2, fontSize: 11, cursor: 'pointer', fontFamily: t.sans,
                 }}
               >
                 Cancel
@@ -358,15 +351,7 @@ function ObsPopup({
           </div>
         )
       ) : (
-        <div
-          style={{
-            textAlign: 'center',
-            fontSize: 11,
-            color: '#4b5563',
-            padding: '5px 0',
-            fontFamily: 'var(--font-jb-mono, monospace)',
-          }}
-        >
+        <div style={{ textAlign: 'center', fontSize: 11, color: t.accent, padding: '5px 0', fontFamily: t.mono }}>
           ✓ On life list
         </div>
       )}
@@ -374,7 +359,7 @@ function ObsPopup({
   );
 }
 
-// ─── Multi-obs popup (multiple species at same location) ─────────────────────
+// ─── Multi-obs popup ──────────────────────────────────────────────────────────
 
 function MultiObsPopup({
   observations,
@@ -390,70 +375,42 @@ function MultiObsPopup({
   const [index, setIndex] = useState(0);
   const safeIndex = Math.min(index, observations.length - 1);
   const obs = observations[safeIndex];
-
-  const textMuted = lightMode ? '#718096' : '#8899aa';
-  const navBg = lightMode ? 'rgba(0,0,0,0.04)' : 'rgba(255,255,255,0.05)';
-  const navBorder = lightMode ? 'rgba(0,0,0,0.09)' : 'rgba(255,255,255,0.09)';
+  const t = getTheme(lightMode);
 
   return (
     <div>
       {observations.length > 1 && (
-        <div
-          style={{
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'space-between',
-            marginBottom: 10,
-            background: navBg,
-            border: `1px solid ${navBorder}`,
-            borderRadius: 5,
-            padding: '3px 6px',
-          }}
-        >
+        <div style={{
+          display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+          marginBottom: 10,
+          background: t.bg2, border: `1px solid ${t.line2}`,
+          borderRadius: 5, padding: '3px 6px',
+        }}>
           <button
-            onClick={() => setIndex((i) => Math.max(0, i - 1))}
+            onClick={() => setIndex(i => Math.max(0, i - 1))}
             disabled={safeIndex === 0}
             style={{
-              background: 'none',
-              border: 'none',
+              background: 'none', border: 'none',
               cursor: safeIndex === 0 ? 'default' : 'pointer',
-              color: safeIndex === 0 ? textMuted : '#f5a623',
-              fontSize: 18,
-              fontWeight: 700,
-              padding: '0 4px',
-              lineHeight: 1,
+              color: safeIndex === 0 ? t.fg4 : t.accent,
+              fontSize: 18, fontWeight: 700, padding: '0 4px', lineHeight: 1,
               opacity: safeIndex === 0 ? 0.3 : 1,
             }}
-          >
-            ‹
-          </button>
-          <span
-            style={{
-              fontSize: 10,
-              color: textMuted,
-              fontFamily: 'var(--font-jb-mono, monospace)',
-              letterSpacing: '0.06em',
-            }}
-          >
+          >‹</button>
+          <span style={{ fontSize: 10, color: t.fg3, fontFamily: t.mono, letterSpacing: '0.06em' }}>
             {safeIndex + 1} / {observations.length} species here
           </span>
           <button
-            onClick={() => setIndex((i) => Math.min(observations.length - 1, i + 1))}
+            onClick={() => setIndex(i => Math.min(observations.length - 1, i + 1))}
             disabled={safeIndex === observations.length - 1}
             style={{
-              background: 'none',
-              border: 'none',
+              background: 'none', border: 'none',
               cursor: safeIndex === observations.length - 1 ? 'default' : 'pointer',
-              color: safeIndex === observations.length - 1 ? textMuted : '#f5a623',
-              fontSize: 18,
-              fontWeight: 700,
-              padding: '0 4px',
-              lineHeight: 1,
+              color: safeIndex === observations.length - 1 ? t.fg4 : t.accent,
+              fontSize: 18, fontWeight: 700, padding: '0 4px', lineHeight: 1,
               opacity: safeIndex === observations.length - 1 ? 0.3 : 1,
             }}
-          >
-            ›
-          </button>
+          >›</button>
         </div>
       )}
       <ObsPopup
@@ -467,7 +424,7 @@ function MultiObsPopup({
   );
 }
 
-// ─── Hotspot Popup ───────────────────────────────────────────────────────────
+// ─── Hotspot Popup ────────────────────────────────────────────────────────────
 
 function HotspotPopupContent({
   hs,
@@ -480,49 +437,42 @@ function HotspotPopupContent({
   onMoreInfo: (hs: Hotspot) => void;
   lightMode: boolean;
 }) {
-  const textPrimary = lightMode ? '#1a2332' : '#f0f4f8';
-  const textMuted = lightMode ? '#718096' : '#8899aa';
+  const t = getTheme(lightMode);
 
   return (
-    <div style={{ fontFamily: 'var(--font-dm-sans, sans-serif)', minWidth: 190 }}>
-      <div style={{ fontSize: 13, fontWeight: 600, color, marginBottom: 4 }}>
-        ◆ {hs.locName}
+    <div style={{ fontFamily: t.sans, minWidth: 190 }}>
+      <div style={{ fontSize: 13, fontWeight: 700, color: t.fg0, fontFamily: t.display, marginBottom: 5, lineHeight: 1.3 }}>
+        {hs.locName}
       </div>
       {hs.numSpeciesAllTime > 0 && (
-        <div style={{ fontSize: 12, color: textMuted, fontFamily: 'var(--font-jb-mono, monospace)', marginBottom: 8 }}>
+        <div style={{ fontSize: 12, color: t.fg3, fontFamily: t.mono, marginBottom: 8 }}>
           {hs.numSpeciesAllTime} species all time
         </div>
       )}
       {hs.latestObsDt && (
-        <div style={{ fontSize: 11, color: textMuted, marginBottom: 8 }}>
+        <div style={{ fontSize: 11, color: t.fg3, marginBottom: 8 }}>
           Last obs: {timeAgo(hs.latestObsDt)}
         </div>
       )}
       <button
         onClick={() => onMoreInfo(hs)}
         style={{
-          width: '100%',
-          padding: '5px 0',
-          background: `${color}18`,
-          border: `1px solid ${color}44`,
-          borderRadius: 4,
-          color,
-          fontSize: 12,
-          fontWeight: 600,
-          cursor: 'pointer',
-          letterSpacing: '0.04em',
+          width: '100%', padding: '6px 0',
+          background: t.accentBg, border: `1px solid ${t.accentBorder}`,
+          borderRadius: 6, color: t.accent,
+          fontSize: 12, fontWeight: 600, cursor: 'pointer', fontFamily: t.sans,
         }}
       >
         More Info →
       </button>
-      <div style={{ fontSize: 10, color: textMuted, marginTop: 4, textAlign: 'center', fontFamily: 'var(--font-jb-mono, monospace)' }}>
+      <div style={{ fontSize: 10, color: t.fg4, marginTop: 4, textAlign: 'center', fontFamily: t.mono }}>
         {hs.locId}
       </div>
     </div>
   );
 }
 
-// ─── Main Map component ──────────────────────────────────────────────────────
+// ─── Main Map component ───────────────────────────────────────────────────────
 
 export interface MapProps {
   center: [number, number];
@@ -535,10 +485,12 @@ export interface MapProps {
   userLocation: [number, number] | null;
   focusedSpecies: { code: string; name: string } | null;
   isMobile?: boolean;
+  loading?: boolean;
   onAddToLifeList: (code: string, name: string, sciName?: string, date?: string, location?: string) => void;
   onHotspotDetail: (hs: Hotspot) => void;
   onPinDrop: (lat: number, lng: number) => void;
   onClearPin: () => void;
+  onRefreshNow?: () => void;
 }
 
 export default function BirdMap({
@@ -552,35 +504,39 @@ export default function BirdMap({
   userLocation,
   focusedSpecies,
   isMobile,
+  loading,
   onAddToLifeList,
   onHotspotDetail,
   onPinDrop,
   onClearPin,
+  onRefreshNow,
 }: MapProps) {
   const [isPinMode, setIsPinMode] = useState(false);
   const [reCenterTrigger, setReCenterTrigger] = useState(0);
   const [radarCenter, setRadarCenter] = useState({ x: 0, y: 0 });
   const [radarRadiusPx, setRadarRadiusPx] = useState(0);
+  const [hoveredMapBtn, setHoveredMapBtn] = useState<string | null>(null);
 
   const handleRadarUpdate = useCallback((x: number, y: number, r: number) => {
     setRadarCenter({ x, y });
     setRadarRadiusPx(r);
   }, []);
+
   const reCenterTarget: [number, number] = userLocation ?? center;
+  const theme = getTheme(settings.lightMode);
 
   function handleMapClick(lat: number, lng: number) {
     onPinDrop(lat, lng);
     setIsPinMode(false);
   }
+
   const lifeSet = new Set(lifeList);
   const { lightMode } = settings;
 
-  // When dimSeenSpecies is off, hide both 'seen' (common) and 'rare' (rare but seen) tiers
   const visibleObs = settings.dimSeenSpecies
     ? observations
-    : observations.filter((o) => o.tier !== 'seen' && o.tier !== 'rare');
+    : observations.filter(o => o.tier !== 'seen' && o.tier !== 'rare');
 
-  // Count recent unique species per hotspot (fallback when numSpeciesAllTime is 0)
   const hotspotRecentSpecies = new Map<string, Set<string>>();
   for (const obs of observations) {
     if (obs.locId) {
@@ -590,7 +546,6 @@ export default function BirdMap({
   }
   const getHotspotHeat = (hs: typeof hotspots[0]) =>
     Math.max(hs.numSpeciesAllTime || 0, hotspotRecentSpecies.get(hs.locId)?.size ?? 0);
-
   const maxHeat = Math.max(...hotspots.map(getHotspotHeat), 1);
 
   const tileUrl = lightMode
@@ -599,244 +554,247 @@ export default function BirdMap({
 
   const tileAttrib = '&copy; <a href="https://stadiamaps.com/">Stadia Maps</a> &copy; <a href="https://openmaptiles.org/">OpenMapTiles</a> &copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>';
 
-  const lm = lightMode;
-  const overlayBg = lm ? 'rgba(240,244,248,0.9)' : 'rgba(13,21,32,0.88)';
-  const overlayBorder = lm ? 'rgba(0,0,0,0.15)' : 'rgba(255,255,255,0.12)';
-  const overlayText = lm ? '#1a2332' : '#ddeeff';
+  // Shared styles for the map overlay control buttons
+  const btnBase: React.CSSProperties = {
+    display: 'flex', alignItems: 'center', gap: 6,
+    padding: '7px 12px', borderRadius: 8,
+    fontSize: 12, fontWeight: 600, fontFamily: theme.sans,
+    cursor: 'pointer', boxShadow: theme.shadowLg,
+    backdropFilter: 'blur(8px)', transition: 'all 0.15s',
+    border: `1px solid ${theme.line2}`,
+  };
 
   return (
     <div style={{ position: 'relative', height: '100%', width: '100%' }}>
-    <MapContainer
-      center={center}
-      zoom={11}
-      style={{ height: '100%', width: '100%', background: lightMode ? '#e8ecf0' : '#0a0e14' }}
-      zoomControl={false}
-    >
-      <TileLayer url={tileUrl} attribution={tileAttrib} maxZoom={20} />
+      <MapContainer
+        center={center}
+        zoom={11}
+        style={{ height: '100%', width: '100%', background: lightMode ? '#e8ecf0' : '#0a0e14' }}
+        zoomControl={false}
+      >
+        <TileLayer url={tileUrl} attribution={tileAttrib} maxZoom={20} />
 
-      <MapController target={flyToTarget} />
-      <RecenterController target={reCenterTarget} trigger={reCenterTrigger} />
-      <MapClickHandler active={isPinMode} onMapClick={handleMapClick} />
-      <CursorController isPinMode={isPinMode} />
+        <MapController target={flyToTarget} />
+        <RecenterController target={reCenterTarget} trigger={reCenterTrigger} />
+        <MapClickHandler active={isPinMode} onMapClick={handleMapClick} />
+        <CursorController isPinMode={isPinMode} />
 
-      {/* Radar position sync — must be inside MapContainer for useMap() access */}
-      {settings.showRadarAnimation && (
-        <RadarPositionSync
-          geoCenter={pinLocation ?? center}
-          radiusKm={settings.searchRadius}
-          onUpdate={handleRadarUpdate}
-        />
-      )}
+        {settings.showRadarAnimation && (
+          <RadarPositionSync
+            geoCenter={pinLocation ?? center}
+            radiusKm={settings.searchRadius}
+            onUpdate={handleRadarUpdate}
+          />
+        )}
 
-      {/* Radius circle — search boundary outline only, no fill */}
-      {settings.showRadiusCircle && (
-        <Circle
-          center={pinLocation ?? center}
-          radius={settings.searchRadius * 1000}
-          pathOptions={{
-            color: '#f5a623',
-            weight: 1.5,
-            opacity: 0.55,
-            fillOpacity: 0,
-            dashArray: '6 4',
-          }}
-        />
-      )}
+        {settings.showRadiusCircle && (
+          <Circle
+            center={pinLocation ?? center}
+            radius={settings.searchRadius * 1000}
+            pathOptions={{
+              color: theme.accent,
+              weight: 1.5,
+              opacity: 0.4,
+              fillOpacity: 0,
+              dashArray: '6 4',
+            }}
+          />
+        )}
 
-      {/* Hotspot markers — rendered first so they sit behind bird markers */}
-      {settings.showHotspots &&
-        hotspots.map((hs) => {
-          const ratio = Math.min(getHotspotHeat(hs) / maxHeat, 1);
-          const color = hotspotHeatColor(ratio);
-          return (
-            <Marker
-              key={hs.locId}
-              position={[hs.lat, hs.lng]}
-              icon={hotspotIcon(ratio)}
-            >
-              <Popup className="bird-popup">
-                <HotspotPopupContent
-                  hs={hs}
-                  color={color}
-                  onMoreInfo={onHotspotDetail}
-                  lightMode={lightMode}
-                />
-              </Popup>
-            </Marker>
-          );
-        })}
+        {/* Hotspot markers — rendered behind bird markers */}
+        {settings.showHotspots &&
+          hotspots.map(hs => {
+            const ratio = Math.min(getHotspotHeat(hs) / maxHeat, 1);
+            const color = hotspotHeatColor(ratio);
+            return (
+              <Marker key={hs.locId} position={[hs.lat, hs.lng]} icon={hotspotIcon(ratio)}>
+                <Popup className="bird-popup">
+                  <HotspotPopupContent
+                    hs={hs}
+                    color={color}
+                    onMoreInfo={onHotspotDetail}
+                    lightMode={lightMode}
+                  />
+                </Popup>
+              </Marker>
+            );
+          })}
 
-      {/* Bird sighting markers — grouped by location so overlapping species share one marker */}
-      {(() => {
-        // Group observations by location
-        const groups = new Map<string, ClassifiedObservation[]>();
-        for (const obs of visibleObs) {
-          const key = obs.locId || obs.locName;
-          if (!groups.has(key)) groups.set(key, []);
-          groups.get(key)!.push(obs);
-        }
-        // Within each group: focused species first, then by tier priority
-        for (const group of groups.values()) {
-          group.sort((a, b) => {
-            const aFoc = focusedSpecies?.code === a.speciesCode ? -1 : 0;
-            const bFoc = focusedSpecies?.code === b.speciesCode ? -1 : 0;
-            if (aFoc !== bFoc) return aFoc - bFoc;
-            return TIER_ORDER[a.tier] - TIER_ORDER[b.tier];
-          });
-        }
-        return Array.from(groups.entries()).map(([locKey, group]) => {
-          const repObs = group[0];
-          const isFocused = !!(focusedSpecies && group.some((o) => o.speciesCode === focusedSpecies.code));
-          const isSeenTier = repObs.tier === 'seen' || repObs.tier === 'rare';
-          const baseOpacity = isSeenTier && settings.dimSeenSpecies ? 0.3 : 1;
-          const focusOpacity = focusedSpecies && !isFocused ? 0.15 : 1;
-          const opacity = baseOpacity * focusOpacity;
-          return (
-            <Marker
-              key={locKey}
-              position={[repObs.lat, repObs.lng]}
-              icon={birdIcon(repObs.tier, settings.liferPulse, opacity, isFocused, settings.lightMode)}
-            >
-              <Popup className="bird-popup">
-                <MultiObsPopup
-                  observations={group}
-                  onAddToLifeList={onAddToLifeList}
-                  lifeSet={lifeSet}
-                  lightMode={lightMode}
-                />
-              </Popup>
-            </Marker>
-          );
-        });
-      })()}
-
-      {/* User location marker — only rendered once GPS fix is confirmed */}
-      {userLocation && (
-        <Marker position={userLocation} icon={userLocationIcon()} zIndexOffset={1000}>
-          <Popup className="bird-popup">
-            <div style={{ fontFamily: 'var(--font-dm-sans, sans-serif)', fontSize: 13, fontWeight: 600, color: '#3b82f6' }}>
-              ◉ Your Location
-            </div>
-          </Popup>
-        </Marker>
-      )}
-
-      {/* Pin drop marker */}
-      {pinLocation && (
-        <Marker position={pinLocation} icon={pinDropIcon()}>
-          <Popup className="bird-popup">
-            <div style={{ fontFamily: 'var(--font-dm-sans, sans-serif)', minWidth: 160 }}>
-              <div style={{ fontSize: 13, fontWeight: 600, color: '#f5a623', marginBottom: 4 }}>
-                ◆ Custom Search Pin
-              </div>
-              <div style={{ fontSize: 11, color: overlayText, opacity: 0.7, marginBottom: 8, fontFamily: 'var(--font-jb-mono, monospace)' }}>
-                Showing birds within ~31mi (50km max)
-              </div>
-              <button
-                onClick={onClearPin}
-                style={{
-                  width: '100%',
-                  padding: '5px 0',
-                  background: 'rgba(239,68,68,0.12)',
-                  border: '1px solid rgba(239,68,68,0.35)',
-                  borderRadius: 4,
-                  color: '#ef4444',
-                  fontSize: 11,
-                  fontWeight: 600,
-                  cursor: 'pointer',
-                }}
+        {/* Bird sighting pin markers — grouped by location */}
+        {(() => {
+          const groups = new Map<string, ClassifiedObservation[]>();
+          for (const obs of visibleObs) {
+            const key = obs.locId || obs.locName;
+            if (!groups.has(key)) groups.set(key, []);
+            groups.get(key)!.push(obs);
+          }
+          for (const group of groups.values()) {
+            group.sort((a, b) => {
+              const aFoc = focusedSpecies?.code === a.speciesCode ? -1 : 0;
+              const bFoc = focusedSpecies?.code === b.speciesCode ? -1 : 0;
+              if (aFoc !== bFoc) return aFoc - bFoc;
+              return TIER_ORDER[a.tier] - TIER_ORDER[b.tier];
+            });
+          }
+          return Array.from(groups.entries()).map(([locKey, group]) => {
+            const repObs = group[0];
+            const isFocused = !!(focusedSpecies && group.some(o => o.speciesCode === focusedSpecies.code));
+            const isSeenTier = repObs.tier === 'seen' || repObs.tier === 'rare';
+            const baseOpacity = isSeenTier && settings.dimSeenSpecies ? 0.3 : 1;
+            const focusOpacity = focusedSpecies && !isFocused ? 0.18 : 1;
+            const opacity = baseOpacity * focusOpacity;
+            return (
+              <Marker
+                key={locKey}
+                position={[repObs.lat, repObs.lng]}
+                icon={birdPinIcon(repObs.tier, settings.liferPulse, opacity, isFocused, settings.lightMode)}
               >
-                ✕ Clear Pin
-              </button>
-            </div>
-          </Popup>
-        </Marker>
+                <Popup className="bird-popup">
+                  <MultiObsPopup
+                    observations={group}
+                    onAddToLifeList={onAddToLifeList}
+                    lifeSet={lifeSet}
+                    lightMode={lightMode}
+                  />
+                </Popup>
+              </Marker>
+            );
+          });
+        })()}
+
+        {/* User GPS location dot */}
+        {userLocation && (
+          <Marker position={userLocation} icon={userLocationIcon()} zIndexOffset={1000}>
+            <Popup className="bird-popup">
+              <div style={{ fontFamily: theme.sans, fontSize: 13, fontWeight: 600, color: '#3b82f6' }}>
+                Your Location
+              </div>
+            </Popup>
+          </Marker>
+        )}
+
+        {/* Custom search pin */}
+        {pinLocation && (
+          <Marker position={pinLocation} icon={pinDropIcon()}>
+            <Popup className="bird-popup">
+              <div style={{ fontFamily: theme.sans, minWidth: 170 }}>
+                <div style={{ fontSize: 13, fontWeight: 700, color: '#F59E0B', fontFamily: theme.display, marginBottom: 5 }}>
+                  Custom Search Pin
+                </div>
+                <div style={{ fontSize: 11, color: theme.fg3, marginBottom: 10, fontFamily: theme.mono }}>
+                  Searching up to 50 km from this point
+                </div>
+                <button
+                  onClick={onClearPin}
+                  style={{
+                    width: '100%', padding: '5px 0',
+                    background: 'rgba(239,68,68,0.08)',
+                    border: '1px solid rgba(239,68,68,0.3)',
+                    borderRadius: 5, color: '#EF4444',
+                    fontSize: 11, fontWeight: 600, cursor: 'pointer', fontFamily: theme.sans,
+                  }}
+                >
+                  Clear Pin
+                </button>
+              </div>
+            </Popup>
+          </Marker>
+        )}
+      </MapContainer>
+
+      {/* Radar canvas overlay */}
+      {settings.showRadarAnimation && radarRadiusPx >= 20 && (
+        <RadarOverlay
+          centerX={radarCenter.x}
+          centerY={radarCenter.y}
+          radiusPx={radarRadiusPx}
+          enabled={settings.showRadarAnimation}
+        />
       )}
-    </MapContainer>
 
-    {/* Radar canvas overlay — rendered outside MapContainer so it's a true DOM overlay */}
-    {settings.showRadarAnimation && radarRadiusPx >= 20 && (
-      <RadarOverlay
-        centerX={radarCenter.x}
-        centerY={radarCenter.y}
-        radiusPx={radarRadiusPx}
-        enabled={settings.showRadarAnimation}
-      />
-    )}
-
-    {/* Pin drop overlay controls */}
-    <div
-      style={{
+      {/* Map overlay controls — bottom-right */}
+      <div style={{
         position: 'absolute',
         bottom: isMobile ? 86 : 30,
         right: 10,
         zIndex: 1001,
-        display: 'flex',
-        flexDirection: 'column',
-        gap: 6,
-        alignItems: 'flex-end',
-      }}
-    >
-      {/* Re-center button */}
-      <button
-        onClick={() => setReCenterTrigger((t) => t + 1)}
-        title={userLocation ? 'Fly to your GPS location' : 'Fly to search center'}
-        style={{
-          padding: '7px 13px',
-          background: overlayBg,
-          border: `1px solid ${overlayBorder}`,
-          borderRadius: 7,
-          color: '#3b82f6',
-          fontSize: 12,
-          fontWeight: 700,
-          cursor: 'pointer',
-          backdropFilter: 'blur(6px)',
-          letterSpacing: '0.03em',
-          boxShadow: '0 2px 8px rgba(0,0,0,0.25)',
-          transition: 'all 0.15s',
-        }}
-      >
-        ⊙ Re-center
-      </button>
-      <button
-        onClick={() => setIsPinMode((v) => !v)}
-        style={{
-          padding: '7px 13px',
-          background: isPinMode ? '#f5a623' : overlayBg,
-          border: `1px solid ${isPinMode ? '#f5a623' : overlayBorder}`,
-          borderRadius: 7,
-          color: isPinMode ? '#0a0e14' : overlayText,
-          fontSize: 12,
-          fontWeight: 700,
-          cursor: 'pointer',
-          backdropFilter: 'blur(6px)',
-          letterSpacing: '0.03em',
-          boxShadow: '0 2px 8px rgba(0,0,0,0.25)',
-          transition: 'all 0.15s',
-        }}
-      >
-        {isPinMode ? '✕ Cancel' : '📍 Drop Pin'}
-      </button>
-      {pinLocation && (
+        display: 'flex', flexDirection: 'column', gap: 6, alignItems: 'flex-end',
+      }}>
+        {/* Refresh */}
+        {onRefreshNow && (
+          <button
+            onClick={onRefreshNow}
+            title="Refresh bird data"
+            onMouseEnter={() => setHoveredMapBtn('refresh')}
+            onMouseLeave={() => setHoveredMapBtn(null)}
+            style={{
+              ...btnBase,
+              background: hoveredMapBtn === 'refresh' && !loading ? theme.bg2 : theme.cardBg,
+              color: loading ? theme.fg3 : theme.accent,
+              cursor: loading ? 'not-allowed' : 'pointer',
+              transform: hoveredMapBtn === 'refresh' && !loading ? 'translateY(-1px)' : 'none',
+            }}
+          >
+            <RefreshCwIcon size={13}/>
+            {loading ? 'Loading…' : 'Refresh'}
+          </button>
+        )}
+
+        {/* Re-center */}
         <button
-          onClick={onClearPin}
+          onClick={() => setReCenterTrigger(n => n + 1)}
+          title={userLocation ? 'Fly to GPS location' : 'Fly to search center'}
+          onMouseEnter={() => setHoveredMapBtn('center')}
+          onMouseLeave={() => setHoveredMapBtn(null)}
           style={{
-            padding: '5px 11px',
-            background: overlayBg,
-            border: '1px solid rgba(239,68,68,0.4)',
-            borderRadius: 7,
-            color: '#ef4444',
-            fontSize: 11,
-            fontWeight: 600,
-            cursor: 'pointer',
-            backdropFilter: 'blur(6px)',
-            boxShadow: '0 2px 8px rgba(0,0,0,0.2)',
+            ...btnBase,
+            background: hoveredMapBtn === 'center' ? theme.bg2 : theme.cardBg,
+            color: theme.fg1,
+            transform: hoveredMapBtn === 'center' ? 'translateY(-1px)' : 'none',
           }}
         >
-          ✕ Clear Pin
+          <CrosshairIcon size={13}/>
+          Center
         </button>
-      )}
-    </div>
+
+        {/* Drop Pin / Cancel */}
+        <button
+          onClick={() => setIsPinMode(v => !v)}
+          onMouseEnter={() => setHoveredMapBtn('pin')}
+          onMouseLeave={() => setHoveredMapBtn(null)}
+          style={{
+            ...btnBase,
+            background: isPinMode ? theme.accent : hoveredMapBtn === 'pin' ? theme.bg2 : theme.cardBg,
+            border: `1px solid ${isPinMode ? theme.accent : theme.line2}`,
+            color: isPinMode ? theme.accentFg : theme.fg1,
+            transform: hoveredMapBtn === 'pin' && !isPinMode ? 'translateY(-1px)' : 'none',
+          }}
+        >
+          <MapPinIcon size={13}/>
+          {isPinMode ? 'Cancel' : 'Drop Pin'}
+        </button>
+
+        {/* Clear Pin */}
+        {pinLocation && (
+          <button
+            onClick={onClearPin}
+            onMouseEnter={() => setHoveredMapBtn('clearpin')}
+            onMouseLeave={() => setHoveredMapBtn(null)}
+            style={{
+              ...btnBase,
+              padding: '6px 10px',
+              background: hoveredMapBtn === 'clearpin' ? 'rgba(239,68,68,0.1)' : theme.cardBg,
+              border: '1px solid rgba(239,68,68,0.35)',
+              color: '#EF4444',
+              fontSize: 11,
+              transform: hoveredMapBtn === 'clearpin' ? 'translateY(-1px)' : 'none',
+            }}
+          >
+            <XIcon size={12}/>
+            Clear Pin
+          </button>
+        )}
+      </div>
     </div>
   );
 }

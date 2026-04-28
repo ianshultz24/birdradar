@@ -1,0 +1,443 @@
+// Option B: "Observatory"
+// Clean productivity/finance + nature. Space Grotesk headings,
+// Plus Jakarta Sans body, IBM Plex Mono data. Cool neutrals, deep forest green.
+// More structured grid feel, tighter hierarchy, Linear-inspired.
+
+const { useState: useStateB } = React;
+
+const lightB = {
+  bg0: '#F8F9FA', bg1: '#FFFFFF', bg2: '#F1F3F5', bg3: '#E9ECEF',
+  fg0: '#111827', fg1: '#374151', fg2: '#6B7280', fg3: '#9CA3AF', fg4: '#D1D5DB',
+  line1: '#F1F3F5', line2: '#E5E7EB', line3: '#D1D5DB',
+  accent: '#1B4332', accentSoft: '#2D6A4F', accentFg: '#FFFFFF',
+  accentBg: 'rgba(27,67,50,0.05)', accentBorder: 'rgba(27,67,50,0.14)',
+  lifer: '#065F46', liferBg: 'rgba(6,95,70,0.05)', liferBorder: 'rgba(6,95,70,0.16)',
+  rare: '#7C2D12', rareBg: 'rgba(124,45,18,0.05)', rareBorder: 'rgba(124,45,18,0.14)',
+  seen: '#6B7280', seenBg: 'rgba(107,114,128,0.05)', seenBorder: 'rgba(107,114,128,0.10)',
+  target: '#115E59', targetBg: 'rgba(17,94,89,0.05)', targetBorder: 'rgba(17,94,89,0.14)',
+  shadow: '0 1px 2px rgba(0,0,0,0.05)',
+  shadowLg: '0 4px 12px rgba(0,0,0,0.08)',
+  mapBg: '#F1F3F5', cardBg: '#FFFFFF',
+};
+
+const darkB = {
+  bg0: '#09090B', bg1: '#111113', bg2: '#18181B', bg3: '#27272A',
+  fg0: '#FAFAFA', fg1: '#D4D4D8', fg2: '#A1A1AA', fg3: '#71717A', fg4: '#3F3F46',
+  line1: '#18181B', line2: '#27272A', line3: '#3F3F46',
+  accent: '#74C69D', accentSoft: '#52B788', accentFg: '#09090B',
+  accentBg: 'rgba(116,198,157,0.07)', accentBorder: 'rgba(116,198,157,0.18)',
+  lifer: '#6EE7B7', liferBg: 'rgba(110,231,183,0.06)', liferBorder: 'rgba(110,231,183,0.16)',
+  rare: '#FCA560', rareBg: 'rgba(252,165,96,0.06)', rareBorder: 'rgba(252,165,96,0.14)',
+  seen: '#71717A', seenBg: 'rgba(113,113,122,0.06)', seenBorder: 'rgba(113,113,122,0.10)',
+  target: '#5EEAD4', targetBg: 'rgba(94,234,212,0.05)', targetBorder: 'rgba(94,234,212,0.14)',
+  shadow: '0 1px 2px rgba(0,0,0,0.3)',
+  shadowLg: '0 4px 16px rgba(0,0,0,0.4)',
+  mapBg: '#0C0C0E', cardBg: '#111113',
+};
+
+function tierB(tier, t) {
+  if (tier === 'lifer' || tier === 'lifer-rare') return { color: t.lifer, bg: t.liferBg, border: t.liferBorder };
+  if (tier === 'rare') return { color: t.rare, bg: t.rareBg, border: t.rareBorder };
+  return { color: t.seen, bg: t.seenBg, border: t.seenBorder };
+}
+
+function tierLabelB(tier) {
+  if (tier === 'lifer-rare') return 'Lifer · Rare';
+  if (tier === 'lifer') return 'Lifer';
+  if (tier === 'rare') return 'Rare';
+  return 'Seen';
+}
+
+function OptionB({ dark }) {
+  const t = dark ? darkB : lightB;
+  const [tab, setTab] = useStateB('alerts');
+  const [focus, setFocus] = useStateB(null);
+  const [sort, setSort] = useStateB('recent');
+
+  const display = "'Space Grotesk', sans-serif";
+  const sans = "'Plus Jakarta Sans', -apple-system, sans-serif";
+  const mono = "'IBM Plex Mono', monospace";
+
+  const toggleFocus = (code, name) => setFocus(prev => prev?.code === code ? null : { code, name });
+
+  const lifers = OBS.filter(o => o.tier === 'lifer' || o.tier === 'lifer-rare');
+  const rare = OBS.filter(o => o.tier === 'rare');
+  const seen = OBS.filter(o => o.tier === 'seen');
+  const sorted = arr => sort === 'closest' ? [...arr].sort((a,b) => a.distKm - b.distKm) : [...arr].sort((a,b) => new Date(b.obsDt) - new Date(a.obsDt));
+
+  const tabs = [
+    { id: 'alerts', label: 'Alerts', icon: Icons.Bell },
+    { id: 'lifelist', label: 'Life List', icon: Icons.Bird },
+    { id: 'settings', label: 'Settings', icon: Icons.Settings },
+  ];
+
+  return (
+    <div style={{ display: 'flex', width: '100%', height: '100%', background: t.bg0, fontFamily: sans, color: t.fg0, overflow: 'hidden' }}>
+      {/* ─── Sidebar ─── */}
+      <div style={{ width: 380, height: '100%', display: 'flex', flexDirection: 'column', background: t.bg1, borderRight: `1px solid ${t.line2}`, flexShrink: 0 }}>
+        {/* Header — clean, minimal */}
+        <div style={{ padding: '18px 20px 14px', borderBottom: `1px solid ${t.line2}` }}>
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 18 }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+              <svg width="24" height="24" viewBox="0 0 24 24" fill="none" style={{ flexShrink: 0 }}>
+                <circle cx="12" cy="12" r="11" stroke={t.accent} strokeWidth="1.5"/>
+                <circle cx="12" cy="12" r="6" stroke={t.accent} strokeWidth="1" opacity="0.4"/>
+                <circle cx="12" cy="12" r="2.5" fill={t.accent}/>
+              </svg>
+              <span style={{ fontSize: 17, fontWeight: 700, fontFamily: display, letterSpacing: '-0.02em', color: t.fg0 }}>
+                BirdRadar
+              </span>
+            </div>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 5, fontSize: 11, fontFamily: mono, color: t.accent, fontWeight: 500 }}>
+              <span style={{ width: 5, height: 5, borderRadius: '50%', background: t.accent }}/>
+              Live
+            </div>
+          </div>
+
+          {/* Stat strip — horizontal, compact */}
+          <div style={{ display: 'flex', gap: 0, background: t.bg2, borderRadius: 8, overflow: 'hidden', border: `1px solid ${t.line1}` }}>
+            {[
+              { label: 'Range', value: OBS.length },
+              { label: 'Lifers', value: lifers.length, accent: true },
+              { label: 'Life list', value: LIFE_LIST.length },
+            ].map((s, i) => (
+              <div key={s.label} style={{ flex: 1, padding: '10px 12px', borderRight: i < 2 ? `1px solid ${t.line2}` : 'none' }}>
+                <div style={{ fontSize: 10, color: t.fg3, fontFamily: mono, letterSpacing: '0.04em', textTransform: 'uppercase', marginBottom: 2 }}>{s.label}</div>
+                <div style={{ fontSize: 20, fontWeight: 700, fontFamily: display, color: s.accent ? t.accent : t.fg0, letterSpacing: '-0.02em' }}>{s.value}</div>
+              </div>
+            ))}
+          </div>
+        </div>
+
+        {/* Tabs — pill style */}
+        <div style={{ display: 'flex', gap: 4, padding: '10px 16px', borderBottom: `1px solid ${t.line2}`, background: t.bg0 }}>
+          {tabs.map(tb => {
+            const active = tb.id === tab;
+            return (
+              <button key={tb.id} onClick={() => setTab(tb.id)} style={{
+                flex: 1, padding: '8px 4px', borderRadius: 6,
+                background: active ? t.bg1 : 'transparent',
+                border: active ? `1px solid ${t.line2}` : '1px solid transparent',
+                boxShadow: active ? t.shadow : 'none',
+                color: active ? t.fg0 : t.fg2,
+                cursor: 'pointer', fontSize: 12, fontWeight: active ? 600 : 400,
+                display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 5, fontFamily: sans,
+              }}>
+                <tb.icon size={14}/>
+                {tb.label}
+              </button>
+            );
+          })}
+        </div>
+
+        <div style={{ flex: 1, overflowY: 'auto', overflowX: 'hidden' }}>
+          {tab === 'alerts' && <AlertsPanelB t={t} mono={mono} sans={sans} display={display}
+            obs={OBS} targets={TARGETS} focus={focus} toggleFocus={toggleFocus}
+            sort={sort} setSort={setSort} sorted={sorted} lifers={lifers} rare={rare} seen={seen}/>}
+          {tab === 'lifelist' && <LifeListPanelB t={t} mono={mono} sans={sans} display={display}/>}
+          {tab === 'settings' && <SettingsPanelB t={t} mono={mono} sans={sans} display={display}/>}
+        </div>
+      </div>
+
+      {/* ─── Map ─── */}
+      <MapAreaB t={t} mono={mono} sans={sans} display={display} observations={OBS} focus={focus} toggleFocus={toggleFocus}/>
+    </div>
+  );
+}
+
+// ─── Cards ──────────────────────────────────────────────────────────────────
+
+function ObsCardB({ obs, t, mono, sans, display, focus, toggleFocus }) {
+  const tc = tierB(obs.tier, t);
+  const focused = focus?.code === obs.speciesCode;
+  const dimmed = focus && !focused;
+
+  return (
+    <button onClick={() => toggleFocus(obs.speciesCode, obs.comName)} style={{
+      width: '100%', textAlign: 'left',
+      background: focused ? tc.bg : 'transparent',
+      border: 'none', borderBottom: `1px solid ${t.line1}`,
+      padding: '14px 20px', cursor: 'pointer', opacity: dimmed ? 0.3 : 1,
+      transition: 'all 0.12s', fontFamily: sans, display: 'block',
+    }}>
+      <div style={{ display: 'flex', alignItems: 'flex-start', gap: 12 }}>
+        {/* Left indicator */}
+        <div style={{ width: 2, height: 40, borderRadius: 1, background: focused ? tc.color : 'transparent', flexShrink: 0, marginTop: 2 }}/>
+
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 3 }}>
+            <span style={{ fontSize: 14, fontWeight: 600, color: t.fg0, fontFamily: display }}>{obs.comName}</span>
+            <span style={{ fontSize: 10, fontWeight: 600, fontFamily: mono, color: tc.color, background: tc.bg,
+              padding: '2px 6px', borderRadius: 4, border: `1px solid ${tc.border}`, letterSpacing: '0.02em' }}>
+              {tierLabelB(obs.tier)}
+            </span>
+          </div>
+          <div style={{ fontSize: 12, color: t.fg2, fontStyle: 'italic', marginBottom: 8 }}>{obs.sciName}</div>
+
+          {/* Meta row — clean horizontal */}
+          <div style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: 12, color: t.fg2, flexWrap: 'wrap' }}>
+            <Icons.MapPin size={12} style={{ color: t.fg3 }}/>
+            <span style={{ maxWidth: 140, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{obs.locName}</span>
+            <span style={{ color: t.fg4, margin: '0 2px' }}>·</span>
+            <span style={{ fontFamily: mono, fontSize: 11 }}>{fmtDist(obs.distKm)} {obs.bearingLabel}</span>
+            <span style={{ color: t.fg4, margin: '0 2px' }}>·</span>
+            <span style={{ fontFamily: mono, fontSize: 11, color: t.fg3 }}>{fmtTimeAgo(obs.obsDt)}</span>
+          </div>
+        </div>
+      </div>
+    </button>
+  );
+}
+
+function TargetCardB({ sp, t, mono, display }) {
+  return (
+    <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '12px 20px', borderBottom: `1px solid ${t.line1}` }}>
+      <Icons.Target size={14} style={{ color: t.target }}/>
+      <div style={{ flex: 1, minWidth: 0 }}>
+        <div style={{ fontSize: 13, fontWeight: 600, color: t.fg0, fontFamily: display }}>{sp.comName}</div>
+        <div style={{ fontSize: 12, color: t.fg2, fontStyle: 'italic' }}>{sp.sciName}</div>
+      </div>
+      <span style={{ fontSize: 10, fontFamily: mono, fontWeight: 600, padding: '3px 8px', borderRadius: 4,
+        color: sp.nearbyCount > 0 ? t.target : t.fg3,
+        background: sp.nearbyCount > 0 ? t.targetBg : 'transparent',
+        border: `1px solid ${sp.nearbyCount > 0 ? t.targetBorder : t.line2}` }}>
+        {sp.nearbyCount > 0 ? `${sp.nearbyCount} nearby` : 'Expected'}
+      </span>
+    </div>
+  );
+}
+
+function SectionHeaderB({ title, count, color, t, mono }) {
+  return (
+    <div style={{ display: 'flex', alignItems: 'center', padding: '11px 20px', background: t.bg2, borderBottom: `1px solid ${t.line1}` }}>
+      <span style={{ width: 8, height: 8, borderRadius: '50%', background: color || t.accent, marginRight: 10, flexShrink: 0, opacity: 0.8 }}/>
+      <span style={{ fontSize: 11, fontWeight: 600, color: t.fg1, letterSpacing: '0.04em', flex: 1 }}>{title}</span>
+      <span style={{ fontSize: 11, fontFamily: mono, color: color || t.fg3, fontWeight: 600 }}>{count}</span>
+    </div>
+  );
+}
+
+function AlertsPanelB({ t, mono, sans, display, obs, targets, focus, toggleFocus, sort, setSort, sorted, lifers, rare, seen }) {
+  const [query, setQuery] = useStateB('');
+  const q = query.toLowerCase().trim();
+  const searching = !!q;
+  const results = searching ? obs.filter(o => o.comName.toLowerCase().includes(q) || o.sciName.toLowerCase().includes(q)) : [];
+
+  return (
+    <div>
+      <div style={{ padding: '14px 20px', borderBottom: `1px solid ${t.line1}` }}>
+        <div style={{ position: 'relative' }}>
+          <Icons.Search size={15} style={{ position: 'absolute', left: 10, top: '50%', transform: 'translateY(-50%)', color: t.fg3 }}/>
+          <input value={query} onChange={e => setQuery(e.target.value)} placeholder="Search species nearby…"
+            style={{ width: '100%', padding: '9px 34px 9px 34px', fontSize: 13, fontFamily: sans,
+              background: t.bg2, border: `1px solid ${searching ? t.accentBorder : t.line2}`,
+              borderRadius: 8, outline: 'none', color: t.fg0, transition: 'border-color 0.15s' }}/>
+          {searching && (
+            <button onClick={() => setQuery('')} style={{ position: 'absolute', right: 10, top: '50%', transform: 'translateY(-50%)', background: 'transparent', border: 'none', color: t.fg3, cursor: 'pointer' }}>
+              <Icons.X size={14}/>
+            </button>
+          )}
+        </div>
+        {!searching && (
+          <div style={{ display: 'flex', marginTop: 10, border: `1px solid ${t.line2}`, borderRadius: 8, overflow: 'hidden' }}>
+            {['recent','closest'].map(s => (
+              <button key={s} onClick={() => setSort(s)} style={{
+                flex: 1, padding: '7px 0',
+                background: sort === s ? t.accentBg : 'transparent',
+                border: 'none',
+                color: sort === s ? t.accent : t.fg2,
+                fontSize: 12, fontWeight: sort === s ? 600 : 400, cursor: 'pointer', fontFamily: sans,
+              }}>{s === 'recent' ? 'Most Recent' : 'Closest'}</button>
+            ))}
+          </div>
+        )}
+      </div>
+
+      {searching ? (
+        <>
+          <div style={{ padding: '10px 20px', fontSize: 12, color: t.fg3, borderBottom: `1px solid ${t.line1}`, fontFamily: mono }}>
+            {results.length} result{results.length !== 1 ? 's' : ''}
+          </div>
+          {results.map(o => <ObsCardB key={`s-${o.speciesCode}-${o.locName}`} obs={o} t={t} mono={mono} sans={sans} display={display} focus={focus} toggleFocus={toggleFocus}/>)}
+        </>
+      ) : (
+        <>
+          {targets.length > 0 && (
+            <>
+              <SectionHeaderB title="Target Species" count={targets.length} color={t.target} t={t} mono={mono}/>
+              {targets.map(sp => <TargetCardB key={sp.speciesCode} sp={sp} t={t} mono={mono} display={display}/>)}
+            </>
+          )}
+          <SectionHeaderB title="Lifer Opportunities" count={lifers.length} color={t.lifer} t={t} mono={mono}/>
+          {sorted(lifers).map(o => <ObsCardB key={`${o.speciesCode}-${o.locName}`} obs={o} t={t} mono={mono} sans={sans} display={display} focus={focus} toggleFocus={toggleFocus}/>)}
+          <SectionHeaderB title="Rare — Already Seen" count={rare.length} color={t.rare} t={t} mono={mono}/>
+          {sorted(rare).map(o => <ObsCardB key={`${o.speciesCode}-${o.locName}`} obs={o} t={t} mono={mono} sans={sans} display={display} focus={focus} toggleFocus={toggleFocus}/>)}
+          <SectionHeaderB title="Seen Nearby" count={seen.length} color={t.seen} t={t} mono={mono}/>
+          {sorted(seen).map(o => <ObsCardB key={`${o.speciesCode}-${o.locName}`} obs={o} t={t} mono={mono} sans={sans} display={display} focus={focus} toggleFocus={toggleFocus}/>)}
+        </>
+      )}
+    </div>
+  );
+}
+
+function LifeListPanelB({ t, mono, sans, display }) {
+  const entries = LIFE_LIST.map(c => ({ code: c, m: LIFE_META[c] || { comName: c } })).sort((a,b) => a.m.comName.localeCompare(b.m.comName));
+  return (
+    <div>
+      <div style={{ display: 'flex', borderBottom: `1px solid ${t.line2}` }}>
+        <div style={{ flex: 1, padding: '16px 20px', borderRight: `1px solid ${t.line2}` }}>
+          <div style={{ fontSize: 10, fontFamily: mono, color: t.fg3, letterSpacing: '0.04em', textTransform: 'uppercase', marginBottom: 2 }}>Life Total</div>
+          <div style={{ fontSize: 28, fontWeight: 700, fontFamily: display, color: t.accent, letterSpacing: '-0.03em' }}>{LIFE_LIST.length}</div>
+        </div>
+        <div style={{ flex: 1, padding: '16px 20px' }}>
+          <div style={{ fontSize: 10, fontFamily: mono, color: t.fg3, letterSpacing: '0.04em', textTransform: 'uppercase', marginBottom: 2 }}>Lifers Nearby</div>
+          <div style={{ fontSize: 28, fontWeight: 700, fontFamily: display, color: t.lifer, letterSpacing: '-0.03em' }}>{OBS.filter(o => o.tier === 'lifer' || o.tier === 'lifer-rare').length}</div>
+        </div>
+      </div>
+
+      <div style={{ padding: '14px 20px', borderBottom: `1px solid ${t.line1}` }}>
+        <div style={{ position: 'relative' }}>
+          <Icons.Search size={15} style={{ position: 'absolute', left: 10, top: '50%', transform: 'translateY(-50%)', color: t.fg3 }}/>
+          <input placeholder="Find in your list…" style={{ width: '100%', padding: '9px 12px 9px 34px', fontSize: 13, fontFamily: sans, background: t.bg2, border: `1px solid ${t.line2}`, borderRadius: 8, outline: 'none', color: t.fg0 }}/>
+        </div>
+        <button style={{ width: '100%', marginTop: 8, padding: '9px', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6,
+          background: t.bg2, border: `1px solid ${t.line2}`, borderRadius: 8, color: t.fg1, fontSize: 13, fontWeight: 500, cursor: 'pointer', fontFamily: sans }}>
+          <Icons.Upload size={14}/> Import eBird CSV
+        </button>
+      </div>
+
+      {entries.map(({ code, m }) => (
+        <div key={code} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '12px 20px', borderBottom: `1px solid ${t.line1}` }}>
+          <span style={{ width: 6, height: 6, borderRadius: '50%', background: t.accent, flexShrink: 0 }}/>
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <div style={{ fontSize: 13, fontWeight: 500, color: t.fg0, fontFamily: display }}>{m.comName}</div>
+            {m.firstDate && <div style={{ fontSize: 11, color: t.fg3, fontFamily: mono, marginTop: 1 }}>{fmtDate(m.firstDate)} · {m.firstLocation}</div>}
+          </div>
+          {m.totalCount && <span style={{ fontSize: 11, fontFamily: mono, color: t.fg3 }}>×{m.totalCount}</span>}
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function SettingsPanelB({ t, mono, sans, display }) {
+  return (
+    <div>
+      {[
+        { group: 'Signal', items: [{ label: 'Search radius', value: '25 km' }, { label: 'Auto-refresh', value: '10 min' }] },
+        { group: 'Notifications', items: [{ label: 'Lifer alerts within 16 km', toggle: true }, { label: 'Audio ping', toggle: false }] },
+        { group: 'Data Source', items: [{ label: 'eBird API', value: 'Connected', accent: true }, { label: 'Region', value: 'US-WA' }] },
+      ].map(g => (
+        <div key={g.group}>
+          <div style={{ padding: '12px 20px', background: t.bg2, borderBottom: `1px solid ${t.line1}`, fontSize: 11, fontWeight: 600, color: t.fg1, letterSpacing: '0.04em' }}>{g.group}</div>
+          {g.items.map(item => (
+            <div key={item.label} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '14px 20px', borderBottom: `1px solid ${t.line1}` }}>
+              <span style={{ fontSize: 13, color: t.fg1 }}>{item.label}</span>
+              {item.toggle !== undefined ? (
+                <div style={{ width: 36, height: 20, borderRadius: 12, background: item.toggle ? t.accent : t.fg4, position: 'relative', cursor: 'pointer' }}>
+                  <div style={{ width: 16, height: 16, borderRadius: '50%', background: '#fff', position: 'absolute', top: 2, left: item.toggle ? 18 : 2, boxShadow: '0 1px 2px rgba(0,0,0,0.15)' }}/>
+                </div>
+              ) : (
+                <span style={{ fontSize: 12, fontFamily: mono, color: item.accent ? t.accent : t.fg1, fontWeight: item.accent ? 600 : 400 }}>{item.value}</span>
+              )}
+            </div>
+          ))}
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function MapAreaB({ t, mono, sans, display, observations, focus, toggleFocus }) {
+  return (
+    <div style={{ flex: 1, position: 'relative', background: t.mapBg, overflow: 'hidden' }}>
+      <svg width="100%" height="100%" style={{ position: 'absolute', inset: 0 }}>
+        <defs>
+          <pattern id="gridB" width="48" height="48" patternUnits="userSpaceOnUse">
+            <path d="M 48 0 L 0 0 0 48" fill="none" stroke={t.line2} strokeWidth="0.5"/>
+          </pattern>
+        </defs>
+        <rect width="100%" height="100%" fill={t.mapBg}/>
+        <rect width="100%" height="100%" fill="url(#gridB)"/>
+        <ellipse cx="28%" cy="58%" rx="14%" ry="18%" fill={t.accent} opacity="0.03" stroke={t.accent} strokeWidth="0.5" strokeOpacity="0.10"/>
+        <ellipse cx="68%" cy="32%" rx="16%" ry="12%" fill={t.accent} opacity="0.025" stroke={t.accent} strokeWidth="0.5" strokeOpacity="0.08"/>
+        <line x1="0%" y1="42%" x2="100%" y2="48%" stroke={t.line2} strokeWidth="1"/>
+        <line x1="52%" y1="0%" x2="48%" y2="100%" stroke={t.line2} strokeWidth="1"/>
+      </svg>
+
+      {/* Pin markers */}
+      {observations.map((obs, i) => {
+        const tc = tierB(obs.tier, t);
+        const focused = focus?.code === obs.speciesCode;
+        const x = 18 + (i % 5) * 15 + Math.sin(i * 2.3) * 7;
+        const y = 14 + Math.floor(i / 5) * 24 + Math.cos(i * 1.9) * 9;
+        return (
+          <div key={`${obs.speciesCode}-${obs.locName}`} style={{
+            position: 'absolute', left: `${x}%`, top: `${y}%`, transform: 'translate(-50%, -100%)',
+            cursor: 'pointer', opacity: focus && !focused ? 0.25 : 1, transition: 'opacity 0.15s', zIndex: focused ? 10 : 1,
+          }} onClick={() => toggleFocus(obs.speciesCode, obs.comName)}>
+            <svg width="20" height="28" viewBox="0 0 20 28">
+              <path d="M10 0C4.5 0 0 4.5 0 10c0 7 10 18 10 18s10-11 10-18C20 4.5 15.5 0 10 0z"
+                    fill={tc.color} opacity={focused ? 1 : 0.8}/>
+              <circle cx="10" cy="9.5" r="3.5" fill={t.bg1}/>
+            </svg>
+            {focused && (
+              <div style={{ position: 'absolute', top: -6, left: '50%', transform: 'translateX(-50%) translateY(-100%)',
+                background: t.cardBg, border: `1px solid ${t.line2}`, borderRadius: 8, padding: '8px 12px',
+                boxShadow: t.shadowLg, whiteSpace: 'nowrap', zIndex: 20 }}>
+                <div style={{ fontSize: 13, fontWeight: 600, fontFamily: display, color: t.fg0 }}>{obs.comName}</div>
+                <div style={{ fontSize: 11, fontFamily: mono, color: t.fg2, marginTop: 2 }}>
+                  {fmtDist(obs.distKm)} {obs.bearingLabel} · {fmtTimeAgo(obs.obsDt)}
+                </div>
+              </div>
+            )}
+          </div>
+        );
+      })}
+
+      {/* User dot */}
+      <div style={{ position: 'absolute', left: '50%', top: '50%', transform: 'translate(-50%, -50%)', zIndex: 4 }}>
+        <div style={{ width: 12, height: 12, borderRadius: '50%', background: t.accent, border: `2.5px solid ${t.bg1}`, boxShadow: t.shadow }}/>
+      </div>
+
+      {/* Map controls */}
+      <div style={{ position: 'absolute', top: 12, right: 12, display: 'flex', flexDirection: 'column', borderRadius: 8, overflow: 'hidden', boxShadow: t.shadow, border: `1px solid ${t.line2}` }}>
+        {['+', '−'].map((s, i) => (
+          <button key={s} style={{ width: 36, height: 36, background: t.cardBg, border: 'none', borderBottom: i === 0 ? `1px solid ${t.line1}` : 'none',
+            color: t.fg1, fontSize: 16, cursor: 'pointer' }}>{s}</button>
+        ))}
+      </div>
+
+      {/* Status pills */}
+      <div style={{ position: 'absolute', top: 12, left: 12, display: 'flex', gap: 6 }}>
+        {[
+          { label: 'Lifers', value: OBS.filter(o => o.tier==='lifer'||o.tier==='lifer-rare').length, color: t.lifer },
+          { label: 'Rare', value: OBS.filter(o => o.tier==='rare').length, color: t.rare },
+          { label: 'Total', value: OBS.length },
+        ].map(p => (
+          <div key={p.label} style={{ padding: '5px 10px', background: t.cardBg, border: `1px solid ${t.line2}`, borderRadius: 6,
+            display: 'flex', alignItems: 'center', gap: 6, boxShadow: t.shadow, fontFamily: mono, fontSize: 11 }}>
+            <span style={{ color: t.fg3 }}>{p.label}</span>
+            <span style={{ fontWeight: 600, color: p.color || t.fg0 }}>{p.value}</span>
+          </div>
+        ))}
+      </div>
+
+      {/* Coords */}
+      <div style={{ position: 'absolute', bottom: 12, right: 12, padding: '5px 10px', background: t.cardBg, border: `1px solid ${t.line2}`,
+        borderRadius: 6, fontFamily: mono, fontSize: 10, color: t.fg2, boxShadow: t.shadow }}>
+        47.6526°N, 122.1714°W
+      </div>
+
+      <div style={{ position: 'absolute', bottom: 12, left: 12 }}>
+        <button style={{ padding: '7px 14px', display: 'flex', alignItems: 'center', gap: 6, background: t.cardBg,
+          border: `1px solid ${t.line2}`, borderRadius: 8, color: t.fg1, fontSize: 12, fontWeight: 500, cursor: 'pointer',
+          fontFamily: sans, boxShadow: t.shadow }}>
+          <Icons.RefreshCw size={13}/> Refresh
+        </button>
+      </div>
+    </div>
+  );
+}
+
+window.OptionB = OptionB;

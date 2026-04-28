@@ -3,6 +3,8 @@
 import { useEffect, useState } from 'react';
 import type { Hotspot, Observation } from '@/lib/ebird';
 import { timeAgo } from '@/lib/ebird';
+import { getTheme } from '@/lib/theme';
+import { CheckIcon } from '@/components/Icons';
 
 interface Props {
   hotspot: Hotspot;
@@ -12,286 +14,138 @@ interface Props {
   lightMode: boolean;
 }
 
-export default function HotspotPanel({
-  hotspot,
-  lifeList,
-  onClose,
-  onAddToLifeList,
-  lightMode,
-}: Props) {
+export default function HotspotPanel({ hotspot, lifeList, onClose, onAddToLifeList, lightMode }: Props) {
   const [obs, setObs] = useState<Observation[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(false);
-
+  const [hoveredCode, setHoveredCode] = useState<string | null>(null);
+  const [hoveredAddCode, setHoveredAddCode] = useState<string | null>(null);
+  const [backHov, setBackHov] = useState(false);
+  const t = getTheme(lightMode);
   const lifeSet = new Set(lifeList);
 
-  // Style tokens
-  const bg = lightMode ? '#f4f6f8' : '#0d1520';
-  const cardBg = lightMode ? '#ffffff' : '#111820';
-  const border = lightMode ? 'rgba(0,0,0,0.08)' : 'rgba(255,255,255,0.06)';
-  const textPrimary = lightMode ? '#1a2332' : '#ddeeff';
-  const textSecondary = lightMode ? '#4a5568' : '#8899aa';
-  const textMuted = lightMode ? '#718096' : '#445566';
-  const headerBg = lightMode ? '#edf2f7' : 'rgba(255,255,255,0.02)';
-
   useEffect(() => {
-    setLoading(true);
-    setError(false);
-    setObs([]);
-
+    setLoading(true); setError(false); setObs([]);
     fetch(`/api/ebird/hotspot-obs?locId=${encodeURIComponent(hotspot.locId)}`)
-      .then((r) => {
-        if (!r.ok) throw new Error('API error');
-        return r.json();
-      })
+      .then(r => { if (!r.ok) throw new Error(); return r.json(); })
       .then((data: Observation[]) => {
-        if (!Array.isArray(data)) throw new Error('bad data');
-        // Deduplicate by speciesCode, keep most recent
+        if (!Array.isArray(data)) throw new Error();
         const seen = new Map<string, Observation>();
         for (const o of data) {
           const existing = seen.get(o.speciesCode);
-          if (!existing || new Date(o.obsDt) > new Date(existing.obsDt)) {
-            seen.set(o.speciesCode, o);
-          }
+          if (!existing || new Date(o.obsDt) > new Date(existing.obsDt)) seen.set(o.speciesCode, o);
         }
-        setObs(Array.from(seen.values()).sort(
-          (a, b) => new Date(b.obsDt).getTime() - new Date(a.obsDt).getTime()
-        ));
+        setObs(Array.from(seen.values()).sort((a, b) => new Date(b.obsDt).getTime() - new Date(a.obsDt).getTime()));
       })
       .catch(() => setError(true))
       .finally(() => setLoading(false));
   }, [hotspot.locId]);
 
   return (
-    <div
-      style={{
-        position: 'absolute',
-        inset: 0,
-        background: bg,
-        display: 'flex',
-        flexDirection: 'column',
-        zIndex: 10,
-      }}
-    >
+    <div style={{ position: 'absolute', inset: 0, background: t.bg1, display: 'flex', flexDirection: 'column', zIndex: 10 }}>
+
       {/* Header */}
-      <div
-        style={{
-          padding: '12px 14px 10px',
-          borderBottom: `1px solid ${border}`,
-          background: headerBg,
-          flexShrink: 0,
-        }}
-      >
-        <div style={{ display: 'flex', alignItems: 'flex-start', gap: 8 }}>
+      <div style={{ padding: '14px 16px', borderBottom: `1px solid ${t.line2}`, background: t.bg2, flexShrink: 0 }}>
+        <div style={{ display: 'flex', alignItems: 'flex-start', gap: 10 }}>
           <button
             onClick={onClose}
+            onMouseEnter={() => setBackHov(true)}
+            onMouseLeave={() => setBackHov(false)}
             style={{
-              background: 'transparent',
-              border: 'none',
-              color: textSecondary,
-              cursor: 'pointer',
-              fontSize: 18,
-              lineHeight: 1,
-              padding: '0 4px',
-              flexShrink: 0,
-              marginTop: 1,
-            }}
-            title="Back"
-          >
-            ←
-          </button>
+              background: backHov ? t.bg3 : 'transparent', border: `1px solid ${t.line2}`,
+              color: t.fg2, cursor: 'pointer', fontSize: 14, lineHeight: 1,
+              padding: '5px 8px', borderRadius: 6, flexShrink: 0,
+              transition: 'background 0.12s',
+            }}>←</button>
           <div style={{ flex: 1, minWidth: 0 }}>
-            <div
-              style={{
-                fontSize: 13,
-                fontWeight: 700,
-                color: textPrimary,
-                overflow: 'hidden',
-                textOverflow: 'ellipsis',
-                whiteSpace: 'nowrap',
-              }}
-            >
+            <div style={{ fontSize: 14, fontWeight: 600, color: t.fg0, fontFamily: t.display, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
               {hotspot.locName}
             </div>
-            <div
-              style={{
-                fontSize: 11,
-                color: textMuted,
-                fontFamily: 'var(--font-jb-mono, monospace)',
-                marginTop: 2,
-              }}
-            >
-              {hotspot.numSpeciesAllTime > 0
-                ? `${hotspot.numSpeciesAllTime} spp all time`
-                : hotspot.locId}
-              {hotspot.latestObsDt && (
-                <span style={{ marginLeft: 8 }}>· last obs {timeAgo(hotspot.latestObsDt)}</span>
-              )}
+            <div style={{ fontSize: 11, color: t.fg3, fontFamily: t.mono, marginTop: 2 }}>
+              {hotspot.numSpeciesAllTime > 0 ? `${hotspot.numSpeciesAllTime} spp all time` : hotspot.locId}
+              {hotspot.latestObsDt && <span style={{ marginLeft: 8 }}>· last obs {timeAgo(hotspot.latestObsDt)}</span>}
             </div>
           </div>
         </div>
       </div>
 
       {/* Section label */}
-      <div
-        style={{
-          padding: '8px 14px 6px',
-          fontSize: 10,
-          letterSpacing: '0.1em',
-          color: textMuted,
-          fontFamily: 'var(--font-jb-mono, monospace)',
-          textTransform: 'uppercase',
-          borderBottom: `1px solid ${border}`,
-          background: headerBg,
-          flexShrink: 0,
-        }}
-      >
-        Recent Species (last 14 days)
+      <div style={{
+        display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+        padding: '10px 16px', background: t.bg2, borderBottom: `1px solid ${t.line1}`,
+        flexShrink: 0,
+      }}>
+        <span style={{ fontSize: 11, fontWeight: 600, color: t.fg1, fontFamily: t.sans, letterSpacing: '0.03em' }}>
+          Recent Species (14 days)
+        </span>
         {!loading && !error && (
-          <span style={{ float: 'right', color: '#5b9cf5' }}>{obs.length}</span>
+          <span style={{ fontSize: 11, fontFamily: t.mono, color: t.accent, fontWeight: 600 }}>{obs.length}</span>
         )}
       </div>
 
-      {/* Species list */}
+      {/* List */}
       <div style={{ flex: 1, overflowY: 'auto' }}>
         {loading && (
-          <div
-            style={{
-              padding: 24,
-              textAlign: 'center',
-              color: textMuted,
-              fontSize: 12,
-              fontFamily: 'var(--font-jb-mono, monospace)',
-              letterSpacing: '0.08em',
-            }}
-          >
-            LOADING…
+          <div style={{ padding: 28, textAlign: 'center', color: t.fg3, fontSize: 12, fontFamily: t.mono }}>
+            Loading…
           </div>
         )}
         {error && (
-          <div style={{ padding: 20, textAlign: 'center', color: '#ef4444', fontSize: 12 }}>
+          <div style={{ padding: 24, textAlign: 'center', color: '#EF4444', fontSize: 13, fontFamily: t.sans }}>
             Failed to load observations.
           </div>
         )}
         {!loading && !error && obs.length === 0 && (
-          <div style={{ padding: 20, textAlign: 'center', color: textMuted, fontSize: 12 }}>
+          <div style={{ padding: 24, textAlign: 'center', color: t.fg3, fontSize: 13, fontFamily: t.sans }}>
             No recent observations found.
           </div>
         )}
-        {!loading &&
-          !error &&
-          obs.map((o) => {
-            const onList = lifeSet.has(o.speciesCode);
-            return (
-              <div
-                key={o.speciesCode}
-                style={{
-                  display: 'flex',
-                  alignItems: 'center',
-                  padding: '8px 12px',
-                  borderBottom: `1px solid ${border}`,
-                  gap: 8,
-                  background: cardBg,
-                }}
-              >
-                <div
-                  style={{
-                    width: 6,
-                    height: 6,
-                    borderRadius: '50%',
-                    background: onList ? '#4b5563' : '#f5a623',
-                    flexShrink: 0,
-                    boxShadow: onList ? undefined : '0 0 4px #f5a62366',
-                  }}
-                />
-                <div style={{ flex: 1, minWidth: 0 }}>
-                  <div
-                    style={{
-                      fontSize: 13,
-                      fontWeight: 600,
-                      color: textPrimary,
-                      overflow: 'hidden',
-                      textOverflow: 'ellipsis',
-                      whiteSpace: 'nowrap',
-                    }}
-                  >
-                    {o.comName}
-                  </div>
-                  <div
-                    style={{
-                      fontSize: 11,
-                      color: textSecondary,
-                      fontStyle: 'italic',
-                      overflow: 'hidden',
-                      textOverflow: 'ellipsis',
-                      whiteSpace: 'nowrap',
-                    }}
-                  >
-                    {o.sciName}
-                  </div>
+        {!loading && !error && obs.map(o => {
+          const onList = lifeSet.has(o.speciesCode);
+          return (
+            <div
+              key={o.speciesCode}
+              onMouseEnter={() => setHoveredCode(o.speciesCode)}
+              onMouseLeave={() => setHoveredCode(null)}
+              style={{
+                display: 'flex', alignItems: 'center', gap: 10,
+                padding: '10px 16px', borderBottom: `1px solid ${t.line1}`,
+                background: hoveredCode === o.speciesCode ? t.bg2 : t.bg1,
+                transition: 'background 0.12s',
+              }}>
+              <span style={{ width: 6, height: 6, borderRadius: '50%', background: onList ? t.seen : t.accent, flexShrink: 0, opacity: 0.8 }}/>
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <div style={{ fontSize: 13, fontWeight: 500, color: t.fg0, fontFamily: t.display, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                  {o.comName}
                 </div>
-                <div
-                  style={{
-                    display: 'flex',
-                    flexDirection: 'column',
-                    alignItems: 'flex-end',
-                    gap: 3,
-                    flexShrink: 0,
-                  }}
-                >
-                  <span
-                    style={{
-                      fontSize: 10,
-                      color: textMuted,
-                      fontFamily: 'var(--font-jb-mono, monospace)',
-                    }}
-                  >
-                    {timeAgo(o.obsDt)}
-                  </span>
-                  {o.howMany && (
-                    <span
-                      style={{
-                        fontSize: 10,
-                        color: textMuted,
-                        fontFamily: 'var(--font-jb-mono, monospace)',
-                      }}
-                    >
-                      ×{o.howMany}
-                    </span>
-                  )}
-                  {!onList ? (
-                    <button
-                      onClick={() => onAddToLifeList(o.speciesCode, o.comName)}
-                      style={{
-                        fontSize: 9,
-                        padding: '2px 6px',
-                        background: 'rgba(245,166,35,0.12)',
-                        border: '1px solid rgba(245,166,35,0.35)',
-                        borderRadius: 3,
-                        color: '#f5a623',
-                        cursor: 'pointer',
-                        fontFamily: 'var(--font-jb-mono, monospace)',
-                        letterSpacing: '0.04em',
-                        fontWeight: 700,
-                      }}
-                    >
-                      + ADD
-                    </button>
-                  ) : (
-                    <span
-                      style={{
-                        fontSize: 9,
-                        color: textMuted,
-                        fontFamily: 'var(--font-jb-mono, monospace)',
-                      }}
-                    >
-                      ✓ SEEN
-                    </span>
-                  )}
+                <div style={{ fontSize: 11, color: t.fg2, fontStyle: 'italic', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                  {o.sciName}
                 </div>
               </div>
-            );
-          })}
+              <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 4, flexShrink: 0 }}>
+                <span style={{ fontSize: 10.5, color: t.fg3, fontFamily: t.mono }}>{timeAgo(o.obsDt)}</span>
+                {o.howMany && <span style={{ fontSize: 10, color: t.fg3, fontFamily: t.mono }}>×{o.howMany}</span>}
+                {!onList ? (
+                  <button
+                    onClick={() => onAddToLifeList(o.speciesCode, o.comName)}
+                    onMouseEnter={() => setHoveredAddCode(o.speciesCode)}
+                    onMouseLeave={() => setHoveredAddCode(null)}
+                    style={{
+                      fontSize: 10, padding: '3px 8px',
+                      background: hoveredAddCode === o.speciesCode ? t.accentBorder : t.accentBg,
+                      border: `1px solid ${t.accentBorder}`,
+                      borderRadius: 5, color: t.accent, cursor: 'pointer',
+                      fontFamily: t.mono, fontWeight: 600, transition: 'background 0.12s',
+                    }}>+ Add</button>
+                ) : (
+                  <span style={{ display: 'flex', alignItems: 'center', gap: 3, fontSize: 10, color: t.lifer, fontFamily: t.mono }}>
+                    <CheckIcon size={10}/> Seen
+                  </span>
+                )}
+              </div>
+            </div>
+          );
+        })}
       </div>
     </div>
   );

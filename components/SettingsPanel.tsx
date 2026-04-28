@@ -1,7 +1,10 @@
 'use client';
 
+import { useState } from 'react';
 import type { AppSettings } from '@/lib/ebird';
 import { requestNotificationPermission } from '@/lib/notifications';
+import { getTheme, type Theme } from '@/lib/theme';
+import { RefreshCwIcon, WifiIcon, WifiOffIcon } from '@/components/Icons';
 
 interface Props {
   settings: AppSettings;
@@ -11,357 +14,369 @@ interface Props {
   loading: boolean;
 }
 
-export default function SettingsPanel({
-  settings,
-  onChange,
-  apiStatus,
-  onRefreshNow,
-  loading,
-}: Props) {
-  const lm = settings.lightMode;
+export default function SettingsPanel({ settings, onChange, apiStatus, onRefreshNow, loading }: Props) {
+  const t = getTheme(settings.lightMode);
+  const [refreshHov, setRefreshHov] = useState(false);
 
   function set<K extends keyof AppSettings>(key: K, value: AppSettings[K]) {
     onChange({ ...settings, [key]: value });
   }
 
-  // Style tokens for light/dark
-  const groupBorder = lm ? 'rgba(0,0,0,0.06)' : 'rgba(255,255,255,0.05)';
-  const groupLabelColor = lm ? '#718096' : '#445566';
-  const labelColor = lm ? '#4a5568' : '#aabbcc';
-  const monoMuted = lm ? '#a0aec0' : '#334455';
+  const statusColor = loading ? t.accent
+    : apiStatus === 'ok' ? t.lifer
+    : apiStatus === 'error' ? '#EF4444'
+    : t.fg4;
+
+  const statusLabel = loading ? 'Fetching data…'
+    : apiStatus === 'ok' ? 'Connected to eBird'
+    : apiStatus === 'error' ? 'Connection error'
+    : 'Idle';
+
+  const radiusKm = settings.searchRadius;
+  const radiusDisplay = settings.useMetric
+    ? `${radiusKm} km`
+    : `${Math.round(radiusKm * 0.621371)} mi`;
+  const minLabel = settings.useMetric ? '5 km' : '3 mi';
+  const maxLabel = settings.useMetric ? '50 km' : '31 mi';
+  const alertRadiusLabel = settings.useMetric ? 'within 16 km' : 'within 10 mi';
 
   return (
-    <div style={{ padding: '4px 0', overflowY: 'auto', height: '100%' }}>
+    <div style={{ overflowY: 'auto', height: '100%', background: t.bg1 }}>
 
-      {/* Map Display */}
-      <SettingsGroup label="Map Display" border={groupBorder} labelColor={groupLabelColor}>
-        <Toggle
-          label="Show hotspot markers"
-          checked={settings.showHotspots}
-          onChange={(v) => set('showHotspots', v)}
-          labelColor={labelColor}
-        />
-        <Toggle
-          label="Dim already-seen species"
-          checked={settings.dimSeenSpecies}
-          onChange={(v) => set('dimSeenSpecies', v)}
-          labelColor={labelColor}
-        />
-        <Toggle
-          label="Lifer pulse animation"
-          checked={settings.liferPulse}
-          onChange={(v) => set('liferPulse', v)}
-          labelColor={labelColor}
-        />
-        <Toggle
-          label="Light mode"
-          checked={settings.lightMode}
-          onChange={(v) => set('lightMode', v)}
-          labelColor={labelColor}
-        />
-        <Toggle
-          label="Show radius circle"
-          checked={settings.showRadiusCircle}
-          onChange={(v) => set('showRadiusCircle', v)}
-          labelColor={labelColor}
-        />
-        <Toggle
-          label="Radar animation"
-          checked={settings.showRadarAnimation}
-          onChange={(v) => set('showRadarAnimation', v)}
-          labelColor={labelColor}
-        />
-      </SettingsGroup>
+      <Group label="Map Display" t={t}>
+        <Row t={t}>
+          <RowToggle label="Show hotspot markers" checked={settings.showHotspots}
+            onChange={v => set('showHotspots', v)} t={t}/>
+        </Row>
+        <Row t={t}>
+          <RowToggle label="Dim already-seen species" checked={settings.dimSeenSpecies}
+            onChange={v => set('dimSeenSpecies', v)} t={t}/>
+        </Row>
+        <Row t={t}>
+          <RowToggle label="Lifer pulse animation" checked={settings.liferPulse}
+            onChange={v => set('liferPulse', v)} t={t}/>
+        </Row>
+        <Row t={t} last>
+          <RowToggle label="Radar animation" checked={settings.showRadarAnimation}
+            onChange={v => set('showRadarAnimation', v)} t={t}/>
+        </Row>
+      </Group>
 
-      {/* Search radius (miles) */}
-      <SettingsGroup label="Search" border={groupBorder} labelColor={groupLabelColor}>
-        <div style={{ padding: '4px 14px 10px' }}>
-          <div
-            style={{
-              display: 'flex',
-              justifyContent: 'space-between',
-              marginBottom: 8,
-              fontSize: 13,
-              color: labelColor,
-            }}
-          >
-            <span>Search radius</span>
-            <span
-              style={{
-                fontFamily: 'var(--font-jb-mono, monospace)',
-                color: '#f5a623',
-                fontWeight: 700,
-              }}
-            >
-              {settings.searchRadius} km
+      <Group label="Appearance" t={t}>
+        <Row t={t} last>
+          <RowToggle label="Light mode" checked={settings.lightMode}
+            onChange={v => set('lightMode', v)} t={t}/>
+        </Row>
+      </Group>
+
+      <Group label="Units" t={t}>
+        <div style={{ padding: '8px 20px 12px', display: 'flex', flexDirection: 'column', gap: 2 }}>
+          {([
+            { value: true, label: 'Metric (km, m)' },
+            { value: false, label: 'Imperial (mi, ft)' },
+          ] as const).map(({ value, label }) => (
+            <UnitRadioRow
+              key={String(value)}
+              label={label}
+              checked={settings.useMetric === value}
+              onSelect={() => set('useMetric', value)}
+              t={t}
+            />
+          ))}
+        </div>
+      </Group>
+
+      <Group label="Search" t={t}>
+        <div style={{ padding: '12px 20px' }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 10 }}>
+            <span style={{ fontSize: 13, color: t.fg1, fontFamily: t.sans }}>Search radius</span>
+            <span style={{ fontFamily: t.mono, fontSize: 12, color: t.accent, fontWeight: 600 }}>
+              {radiusDisplay}
             </span>
           </div>
           <input
-            type="range"
-            min={5}
-            max={50}
-            step={5}
+            type="range" min={5} max={50} step={5}
             value={settings.searchRadius}
-            onChange={(e) => set('searchRadius', Number(e.target.value))}
-            style={{ width: '100%', accentColor: '#f5a623' }}
+            onChange={e => set('searchRadius', Number(e.target.value))}
+            style={{ width: '100%', accentColor: t.accent }}
           />
-          <div
-            style={{
-              display: 'flex',
-              justifyContent: 'space-between',
-              fontSize: 10,
-              color: monoMuted,
-              fontFamily: 'var(--font-jb-mono, monospace)',
-              marginTop: 4,
-            }}
-          >
-            <span>5 km</span>
-            <span>50 km</span>
+          <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: 5, fontSize: 10, color: t.fg3, fontFamily: t.mono }}>
+            <span>{minLabel}</span><span>{maxLabel}</span>
           </div>
         </div>
-      </SettingsGroup>
+      </Group>
 
-      {/* Auto-refresh */}
-      <SettingsGroup label="Auto-Refresh" border={groupBorder} labelColor={groupLabelColor}>
-        <div style={{ padding: '4px 14px 10px', display: 'flex', flexDirection: 'column', gap: 4 }}>
-          {([0, 5, 15, 30] as const).map((v) => (
-            <label
+      <Group label="Auto-Refresh" t={t}>
+        <div style={{ padding: '8px 20px 12px', display: 'flex', flexDirection: 'column', gap: 2 }}>
+          {([0, 5, 15, 30] as const).map(v => (
+            <AutoRefreshRow
               key={v}
-              style={{
-                display: 'flex',
-                alignItems: 'center',
-                gap: 8,
-                cursor: 'pointer',
-                padding: '4px 0',
-              }}
-            >
-              <input
-                type="radio"
-                name="autoRefresh"
-                value={v}
-                checked={settings.autoRefresh === v}
-                onChange={() => set('autoRefresh', v)}
-                style={{ accentColor: '#f5a623' }}
-              />
-              <span style={{ fontSize: 13, color: labelColor }}>
-                {v === 0 ? 'Off' : `Every ${v} minutes`}
-              </span>
-            </label>
+              value={v}
+              selected={settings.autoRefresh === v}
+              onSelect={() => set('autoRefresh', v)}
+              t={t}
+            />
           ))}
         </div>
-      </SettingsGroup>
+      </Group>
 
-      {/* Alerts */}
-      <SettingsGroup label="Alerts" border={groupBorder} labelColor={groupLabelColor}>
-        <Toggle
-          label="Enable lifer alerts (within 10 mi)"
-          checked={settings.notificationsEnabled}
-          onChange={async (v) => {
-            if (v) await requestNotificationPermission();
-            set('notificationsEnabled', v);
-          }}
-          labelColor={labelColor}
-        />
-        {settings.notificationsEnabled && (
-          <Toggle
-            label="Sound alerts"
-            checked={settings.soundEnabled}
-            onChange={(v) => set('soundEnabled', v)}
-            labelColor={labelColor}
+      <Group label="Alerts" t={t}>
+        <Row t={t}>
+          <RowToggle
+            label={`Lifer alerts ${alertRadiusLabel}`}
+            checked={settings.notificationsEnabled}
+            onChange={async v => { if (v) await requestNotificationPermission(); set('notificationsEnabled', v); }}
+            t={t}
           />
+        </Row>
+        {settings.notificationsEnabled && (
+          <Row t={t}>
+            <RowToggle label="Sound alerts" checked={settings.soundEnabled}
+              onChange={v => set('soundEnabled', v)} t={t}/>
+          </Row>
         )}
-        <div
-          style={{
-            padding: '4px 14px 10px',
-            fontSize: 11,
-            color: monoMuted,
-            fontFamily: 'var(--font-jb-mono, monospace)',
-            letterSpacing: '0.04em',
-          }}
-        >
+        <div style={{ padding: '6px 20px 12px', fontSize: 11, color: t.fg3, fontFamily: t.mono }}>
           Fires once per species per session
         </div>
-      </SettingsGroup>
+      </Group>
 
-      {/* API Status */}
-      <SettingsGroup label="API Status" border={groupBorder} labelColor={groupLabelColor}>
-        <div style={{ padding: '8px 14px 12px' }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 12 }}>
-            <div
-              style={{
-                width: 8,
-                height: 8,
-                borderRadius: '50%',
-                background:
-                  loading
-                    ? '#f5a623'
-                    : apiStatus === 'ok'
-                    ? '#3ecfb4'
-                    : apiStatus === 'error'
-                    ? '#ef4444'
-                    : '#4b5563',
-                boxShadow:
-                  !loading && apiStatus === 'ok'
-                    ? '0 0 6px #3ecfb4'
-                    : undefined,
-              }}
-            />
-            <span style={{ fontSize: 13, color: labelColor }}>
-              {loading
-                ? 'Fetching data…'
-                : apiStatus === 'ok'
-                ? 'Connected to eBird'
-                : apiStatus === 'error'
-                ? 'Connection error'
-                : 'Idle'}
-            </span>
+      <Group label="Data Source" t={t}>
+        <div style={{ padding: '12px 20px' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 14 }}>
+            <span style={{ width: 7, height: 7, borderRadius: '50%', background: statusColor, flexShrink: 0 }}/>
+            <span style={{ fontSize: 13, color: t.fg1, fontFamily: t.sans }}>{statusLabel}</span>
+            {apiStatus === 'ok'
+              ? <WifiIcon size={14} style={{ color: t.lifer, marginLeft: 'auto' }}/>
+              : apiStatus === 'error'
+              ? <WifiOffIcon size={14} style={{ color: '#EF4444', marginLeft: 'auto' }}/>
+              : null}
           </div>
           <button
             onClick={onRefreshNow}
             disabled={loading}
+            onMouseEnter={() => setRefreshHov(true)}
+            onMouseLeave={() => setRefreshHov(false)}
             style={{
-              width: '100%',
-              padding: '8px 0',
-              background: loading ? 'rgba(255,255,255,0.04)' : 'rgba(245,166,35,0.1)',
-              border: `1px solid ${loading ? 'rgba(255,255,255,0.08)' : 'rgba(245,166,35,0.3)'}`,
-              borderRadius: 5,
-              color: loading ? '#334455' : '#f5a623',
-              fontSize: 13,
-              fontWeight: 600,
-              cursor: loading ? 'not-allowed' : 'pointer',
-              letterSpacing: '0.04em',
+              width: '100%', padding: '9px 0',
+              display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 7,
+              background: loading ? t.bg2 : refreshHov ? t.accentBorder : t.accentBg,
+              border: `1px solid ${loading ? t.line2 : t.accentBorder}`,
+              borderRadius: 8,
+              color: loading ? t.fg3 : t.accent,
+              fontSize: 13, fontWeight: 600, cursor: loading ? 'not-allowed' : 'pointer',
+              fontFamily: t.sans, transition: 'all 0.15s',
             }}
           >
+            <RefreshCwIcon size={14}/>
             {loading ? 'Refreshing…' : 'Refresh Now'}
           </button>
         </div>
-      </SettingsGroup>
+      </Group>
 
-      {/* Legend */}
-      <SettingsGroup label="Marker Legend" border={groupBorder} labelColor={groupLabelColor}>
-        <div style={{ padding: '6px 14px 12px', display: 'flex', flexDirection: 'column', gap: 8 }}>
-          {[
-            { color: '#60a5fa', label: 'Lifer + Rare', pulse: true },
-            { color: '#60a5fa', label: 'Lifer (common)', pulse: false },
-            { color: '#e2e8f0', label: 'Rare seen (pulsing)', pulse: true, white: true },
-            { color: '#e2e8f0', label: 'Already seen', pulse: false, white: true },
-            { color: '#f5a623', label: 'Hotspot (heatmap)', diamond: true },
-          ].map(({ color, label, pulse, diamond, white }) => (
-            <div key={label} style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-              <div
-                style={{
-                  width: 10,
-                  height: 10,
-                  borderRadius: diamond ? 0 : '50%',
-                  transform: diamond ? 'rotate(45deg)' : undefined,
-                  background: color,
-                  border: white ? '1px solid rgba(100,116,139,0.5)' : undefined,
-                  boxShadow: `0 0 ${pulse ? '8px' : '4px'} ${color}88`,
-                  flexShrink: 0,
-                }}
-              />
-              <span style={{ fontSize: 12, color: labelColor }}>{label}</span>
-              {pulse && (
-                <span
-                  style={{
-                    fontSize: 9,
-                    fontFamily: 'var(--font-jb-mono, monospace)',
-                    color: '#aabbcc77',
-                    marginLeft: 2,
-                  }}
-                >
-                  PULSE
-                </span>
-              )}
-            </div>
-          ))}
+      <Group label="Marker Legend" t={t}>
+        <div style={{ padding: '10px 20px 14px', display: 'flex', flexDirection: 'column', gap: 10 }}>
+          {/* Lifer — green pin, pulses */}
+          <LegendRow t={t} label="Lifer (new species)" pulse>
+            <svg width="12" height="16" viewBox="0 0 12 16" style={{ flexShrink: 0 }}>
+              <path d="M6 0C2.69 0 0 2.69 0 6c0 4.67 6 10 6 10s6-5.33 6-10C12 2.69 9.31 0 6 0z"
+                fill="#059669" opacity="0.9"/>
+              <circle cx="6" cy="5.5" r="2" fill="white" opacity="0.8"/>
+            </svg>
+          </LegendRow>
+          {/* Lifer + Rare — red pin, pulses */}
+          <LegendRow t={t} label="Lifer + Rare (new + eBird notable)" pulse>
+            <svg width="12" height="16" viewBox="0 0 12 16" style={{ flexShrink: 0 }}>
+              <path d="M6 0C2.69 0 0 2.69 0 6c0 4.67 6 10 6 10s6-5.33 6-10C12 2.69 9.31 0 6 0z"
+                fill="#DC2626" opacity="0.9"/>
+              <circle cx="6" cy="5.5" r="2" fill="white" opacity="0.8"/>
+            </svg>
+          </LegendRow>
+          {/* Rare — red pin, no pulse */}
+          <LegendRow t={t} label="Rare (eBird notable, already seen)">
+            <svg width="12" height="16" viewBox="0 0 12 16" style={{ flexShrink: 0 }}>
+              <path d="M6 0C2.69 0 0 2.69 0 6c0 4.67 6 10 6 10s6-5.33 6-10C12 2.69 9.31 0 6 0z"
+                fill="#DC2626" opacity="0.65"/>
+              <circle cx="6" cy="5.5" r="2" fill="white" opacity="0.8"/>
+            </svg>
+          </LegendRow>
+          {/* Seen — gray pin */}
+          <LegendRow t={t} label="Previously seen">
+            <svg width="12" height="16" viewBox="0 0 12 16" style={{ flexShrink: 0 }}>
+              <path d="M6 0C2.69 0 0 2.69 0 6c0 4.67 6 10 6 10s6-5.33 6-10C12 2.69 9.31 0 6 0z"
+                fill="#9CA3AF" opacity="0.75"/>
+              <circle cx="6" cy="5.5" r="2" fill="white" opacity="0.8"/>
+            </svg>
+          </LegendRow>
+          {/* Hotspot — colored dot */}
+          <LegendRow t={t} label="Hotspot (heatmap by species count)">
+            <div style={{
+              width: 10, height: 10, borderRadius: '50%',
+              background: 'linear-gradient(135deg, #f5a623, #ef4444)',
+              border: '1.5px solid rgba(255,255,255,0.4)',
+              boxShadow: '0 1px 3px rgba(0,0,0,0.25)',
+              flexShrink: 0,
+            }}/>
+          </LegendRow>
         </div>
-      </SettingsGroup>
+      </Group>
     </div>
   );
 }
 
-function SettingsGroup({
-  label,
-  border,
-  labelColor,
-  children,
-}: {
-  label: string;
-  border: string;
-  labelColor: string;
-  children: React.ReactNode;
-}) {
+function Group({ label, t, children }: { label: string; t: Theme; children: React.ReactNode }) {
   return (
-    <div style={{ borderBottom: `1px solid ${border}`, paddingBottom: 2 }}>
-      <div
-        style={{
-          padding: '10px 14px 6px',
-          fontSize: 10,
-          letterSpacing: '0.1em',
-          color: labelColor,
-          fontFamily: 'var(--font-jb-mono, monospace)',
-          textTransform: 'uppercase',
-        }}
-      >
-        {label}
-      </div>
+    <div>
+      <div style={{
+        padding: '11px 20px', background: t.bg2,
+        borderTop: `1px solid ${t.line1}`, borderBottom: `1px solid ${t.line1}`,
+        fontSize: 11, fontWeight: 600, color: t.fg1,
+        letterSpacing: '0.04em', fontFamily: t.sans,
+      }}>{label}</div>
       {children}
     </div>
   );
 }
 
-function Toggle({
-  label,
-  checked,
-  onChange,
-  labelColor,
-}: {
+function Row({ t, last, children }: { t: Theme; last?: boolean; children: React.ReactNode }) {
+  return (
+    <div style={{ borderBottom: last ? 'none' : `1px solid ${t.line1}` }}>
+      {children}
+    </div>
+  );
+}
+
+function RowToggle({ label, checked, onChange, t }: {
   label: string;
   checked: boolean;
   onChange: (v: boolean) => void;
-  labelColor: string;
+  t: Theme;
 }) {
+  const [hov, setHov] = useState(false);
+
   return (
-    <label
+    <div
+      onMouseEnter={() => setHov(true)}
+      onMouseLeave={() => setHov(false)}
       style={{
-        display: 'flex',
-        alignItems: 'center',
-        justifyContent: 'space-between',
-        padding: '8px 14px',
+        display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+        padding: '13px 20px',
+        background: hov ? t.bg2 : 'transparent',
+        transition: 'background 0.12s',
         cursor: 'pointer',
-        borderBottom: '1px solid rgba(128,128,128,0.06)',
       }}
+      onClick={() => onChange(!checked)}
     >
-      <span style={{ fontSize: 13, color: labelColor }}>{label}</span>
+      <span style={{ fontSize: 13, color: t.fg1, fontFamily: t.sans }}>{label}</span>
       <div
-        onClick={() => onChange(!checked)}
         style={{
-          width: 36,
-          height: 20,
-          borderRadius: 10,
-          background: checked ? 'rgba(245,166,35,0.3)' : 'rgba(128,128,128,0.12)',
-          border: `1px solid ${checked ? 'rgba(245,166,35,0.5)' : 'rgba(128,128,128,0.15)'}`,
+          width: 36, height: 20, borderRadius: 12, flexShrink: 0,
+          background: checked ? t.accent : t.bg3,
           position: 'relative',
-          cursor: 'pointer',
-          transition: 'background 0.2s, border-color 0.2s',
-          flexShrink: 0,
+          transition: 'background 0.2s',
         }}
       >
-        <div
-          style={{
-            position: 'absolute',
-            top: 2,
-            left: checked ? 18 : 2,
-            width: 14,
-            height: 14,
-            borderRadius: '50%',
-            background: checked ? '#f5a623' : '#4b5563',
-            transition: 'left 0.2s, background 0.2s',
-            boxShadow: checked ? '0 0 4px #f5a62366' : undefined,
-          }}
-        />
+        <div style={{
+          position: 'absolute', top: 2, left: checked ? 18 : 2,
+          width: 16, height: 16, borderRadius: '50%',
+          background: checked ? t.accentFg : t.fg3,
+          boxShadow: '0 1px 3px rgba(0,0,0,0.15)',
+          transition: 'left 0.2s, background 0.2s',
+        }}/>
       </div>
-    </label>
+    </div>
+  );
+}
+
+function UnitRadioRow({ label, checked, onSelect, t }: {
+  label: string;
+  checked: boolean;
+  onSelect: () => void;
+  t: Theme;
+}) {
+  const [hov, setHov] = useState(false);
+
+  return (
+    <div
+      onMouseEnter={() => setHov(true)}
+      onMouseLeave={() => setHov(false)}
+      onClick={onSelect}
+      style={{
+        display: 'flex', alignItems: 'center', gap: 10,
+        cursor: 'pointer', padding: '6px 0',
+        background: hov ? t.bg2 : 'transparent',
+        borderRadius: 6, marginLeft: -4, paddingLeft: 4,
+        transition: 'background 0.12s',
+      }}
+    >
+      <span style={{
+        width: 16, height: 16, borderRadius: '50%', flexShrink: 0,
+        border: `2px solid ${checked ? t.accent : t.line3}`,
+        background: checked ? t.accent : 'transparent',
+        display: 'flex', alignItems: 'center', justifyContent: 'center',
+        transition: 'all 0.15s',
+      }}>
+        {checked && (
+          <span style={{ width: 5, height: 5, borderRadius: '50%', background: t.accentFg }}/>
+        )}
+      </span>
+      <span style={{ fontSize: 13, color: t.fg1, fontFamily: t.sans }}>{label}</span>
+    </div>
+  );
+}
+
+function AutoRefreshRow({ value, selected, onSelect, t }: {
+  value: 0 | 5 | 15 | 30;
+  selected: boolean;
+  onSelect: () => void;
+  t: Theme;
+}) {
+  const [hov, setHov] = useState(false);
+
+  return (
+    <div
+      onMouseEnter={() => setHov(true)}
+      onMouseLeave={() => setHov(false)}
+      onClick={onSelect}
+      style={{
+        display: 'flex', alignItems: 'center', gap: 10,
+        cursor: 'pointer', padding: '6px 0',
+        background: hov ? t.bg2 : 'transparent',
+        borderRadius: 6, marginLeft: -4, paddingLeft: 4,
+        transition: 'background 0.12s',
+      }}
+    >
+      <span style={{
+        width: 16, height: 16, borderRadius: '50%', flexShrink: 0,
+        border: `2px solid ${selected ? t.accent : t.line3}`,
+        background: selected ? t.accent : 'transparent',
+        display: 'flex', alignItems: 'center', justifyContent: 'center',
+        transition: 'all 0.15s',
+      }}>
+        {selected && (
+          <span style={{ width: 5, height: 5, borderRadius: '50%', background: t.accentFg }}/>
+        )}
+      </span>
+      <span style={{ fontSize: 13, color: t.fg1, fontFamily: t.sans }}>
+        {value === 0 ? 'Off' : `Every ${value} minutes`}
+      </span>
+    </div>
+  );
+}
+
+function LegendRow({ t, label, children, pulse }: { t: Theme; label: string; children: React.ReactNode; pulse?: boolean }) {
+  return (
+    <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+      <div style={{ width: 12, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
+        {children}
+      </div>
+      <span style={{ fontSize: 12, color: t.fg1, fontFamily: t.sans, flex: 1 }}>{label}</span>
+      {pulse && (
+        <span style={{
+          fontSize: 9, fontFamily: t.mono, color: t.accent,
+          background: t.accentBg, border: `1px solid ${t.accentBorder}`,
+          borderRadius: 4, padding: '1px 5px', letterSpacing: '0.04em', flexShrink: 0,
+        }}>pulse</span>
+      )}
+    </div>
   );
 }

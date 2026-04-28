@@ -1,0 +1,186 @@
+// Mock eBird-style data for the prototype.
+// Coordinates are anchored around Seattle (47.65, -122.17) to match the repo's default.
+
+const USER = { lat: 47.6526, lng: -122.1714 };
+
+function kmBetween(a, b) {
+  const R = 6371;
+  const dLat = (b.lat - a.lat) * Math.PI / 180;
+  const dLng = (b.lng - a.lng) * Math.PI / 180;
+  const x = Math.sin(dLat/2)**2 + Math.cos(a.lat*Math.PI/180)*Math.cos(b.lat*Math.PI/180)*Math.sin(dLng/2)**2;
+  return R * 2 * Math.atan2(Math.sqrt(x), Math.sqrt(1-x));
+}
+
+function bearingTo(a, b) {
+  const φ1 = a.lat * Math.PI/180, φ2 = b.lat * Math.PI/180;
+  const Δλ = (b.lng - a.lng) * Math.PI / 180;
+  const y = Math.sin(Δλ) * Math.cos(φ2);
+  const x = Math.cos(φ1)*Math.sin(φ2) - Math.sin(φ1)*Math.cos(φ2)*Math.cos(Δλ);
+  return (Math.atan2(y, x) * 180/Math.PI + 360) % 360;
+}
+
+function cardinal(b) {
+  const dirs = ['N','NE','E','SE','S','SW','W','NW'];
+  return dirs[Math.round(b/45) % 8];
+}
+
+// Helper to make timestamps (N hours / minutes ago)
+const now = new Date();
+const hoursAgo = (h) => new Date(now.getTime() - h*3600*1000).toISOString();
+const minutesAgo = (m) => new Date(now.getTime() - m*60*1000).toISOString();
+
+const OBSERVATIONS = [
+  // ─── Lifers (new species, not on life list) ───────────────────────────────
+  {
+    speciesCode: 'varthr', comName: 'Varied Thrush', sciName: 'Ixoreus naevius',
+    lat: 47.6711, lng: -122.1843, locName: 'Bridle Trails State Park',
+    obsDt: hoursAgo(0.3), tier: 'lifer-rare', notable: true, reportCount: 4, howMany: 2,
+  },
+  {
+    speciesCode: 'norgos', comName: 'Northern Goshawk', sciName: 'Accipiter gentilis',
+    lat: 47.6234, lng: -122.2541, locName: 'Mercer Slough Nature Park',
+    obsDt: hoursAgo(1.1), tier: 'lifer-rare', notable: true, reportCount: 1, howMany: 1,
+  },
+  {
+    speciesCode: 'rucrkin', comName: 'Ruby-crowned Kinglet', sciName: 'Corthylio calendula',
+    lat: 47.6801, lng: -122.1502, locName: 'Kelsey Creek Park',
+    obsDt: minutesAgo(35), tier: 'lifer', notable: false, reportCount: 8, howMany: 5,
+  },
+  {
+    speciesCode: 'tenwar', comName: 'Tennessee Warbler', sciName: 'Leiothlypis peregrina',
+    lat: 47.6398, lng: -122.1211, locName: 'Marymoor Park — NW corner',
+    obsDt: hoursAgo(2.4), tier: 'lifer', notable: false, reportCount: 2, howMany: 1,
+  },
+  {
+    speciesCode: 'pilwoo', comName: 'Pileated Woodpecker', sciName: 'Dryocopus pileatus',
+    lat: 47.6933, lng: -122.2011, locName: 'Cougar Mountain Regional Park',
+    obsDt: hoursAgo(3.8), tier: 'lifer', notable: false, reportCount: 3, howMany: 1,
+  },
+  {
+    speciesCode: 'easkin', comName: 'Eastern Kingbird', sciName: 'Tyrannus tyrannus',
+    lat: 47.6188, lng: -122.0961, locName: 'Redmond Retention Pond',
+    obsDt: hoursAgo(5.2), tier: 'lifer', notable: false, reportCount: 1, howMany: 1,
+  },
+
+  // ─── Rare seen (notable + already on life list) ───────────────────────────
+  {
+    speciesCode: 'mouqua', comName: 'Mountain Quail', sciName: 'Oreortyx pictus',
+    lat: 47.6455, lng: -122.2287, locName: 'Lake Hills Greenbelt',
+    obsDt: hoursAgo(1.7), tier: 'rare', notable: true, reportCount: 2, howMany: 4,
+  },
+  {
+    speciesCode: 'sabgul', comName: "Sabine's Gull", sciName: 'Xema sabini',
+    lat: 47.6089, lng: -122.1983, locName: 'Meydenbauer Bay Park',
+    obsDt: hoursAgo(4.5), tier: 'rare', notable: true, reportCount: 1, howMany: 1,
+  },
+
+  // ─── Seen (already on life list, not notable) ─────────────────────────────
+  {
+    speciesCode: 'amecro', comName: 'American Crow', sciName: 'Corvus brachyrhynchos',
+    lat: 47.6612, lng: -122.1677, locName: 'Downtown Park, Bellevue',
+    obsDt: minutesAgo(12), tier: 'seen', notable: false, reportCount: 22, howMany: 8,
+  },
+  {
+    speciesCode: 'rtbhaw', comName: 'Red-tailed Hawk', sciName: 'Buteo jamaicensis',
+    lat: 47.6512, lng: -122.1434, locName: 'Sammamish River Trail',
+    obsDt: minutesAgo(45), tier: 'seen', notable: false, reportCount: 14, howMany: 1,
+  },
+  {
+    speciesCode: 'norfli', comName: 'Northern Flicker', sciName: 'Colaptes auratus',
+    lat: 47.6723, lng: -122.1899, locName: 'Larsen Lake Blueberry Farm',
+    obsDt: hoursAgo(2.1), tier: 'seen', notable: false, reportCount: 11, howMany: 2,
+  },
+  {
+    speciesCode: 'stejay', comName: "Steller's Jay", sciName: 'Cyanocitta stelleri',
+    lat: 47.6441, lng: -122.1301, locName: 'Marymoor Park',
+    obsDt: hoursAgo(3.3), tier: 'seen', notable: false, reportCount: 19, howMany: 3,
+  },
+  {
+    speciesCode: 'whcspa', comName: 'White-crowned Sparrow', sciName: 'Zonotrichia leucophrys',
+    lat: 47.6388, lng: -122.2044, locName: 'Mercer Slough Boardwalk',
+    obsDt: hoursAgo(1.5), tier: 'seen', notable: false, reportCount: 9, howMany: 4,
+  },
+  {
+    speciesCode: 'annhum', comName: "Anna's Hummingbird", sciName: 'Calypte anna',
+    lat: 47.6501, lng: -122.1611, locName: 'Wilburton Hill Park',
+    obsDt: minutesAgo(22), tier: 'seen', notable: false, reportCount: 31, howMany: 2,
+  },
+];
+
+// Compute distance + bearing on each observation
+const OBS = OBSERVATIONS.map(o => ({
+  ...o,
+  distKm: kmBetween(USER, { lat: o.lat, lng: o.lng }),
+  bearing: bearingTo(USER, { lat: o.lat, lng: o.lng }),
+  bearingLabel: cardinal(bearingTo(USER, { lat: o.lat, lng: o.lng })),
+}));
+
+const TARGETS = [
+  { speciesCode: 'varthr', comName: 'Varied Thrush', sciName: 'Ixoreus naevius', nearbyCount: 4 },
+  { speciesCode: 'tenwar', comName: 'Tennessee Warbler', sciName: 'Leiothlypis peregrina', nearbyCount: 2 },
+  { speciesCode: 'norgos', comName: 'Northern Goshawk', sciName: 'Accipiter gentilis', nearbyCount: 1 },
+  { speciesCode: 'pilwoo', comName: 'Pileated Woodpecker', sciName: 'Dryocopus pileatus', nearbyCount: 3 },
+  { speciesCode: 'barowl', comName: 'Barred Owl', sciName: 'Strix varia', nearbyCount: 0 },
+  { speciesCode: 'rubhum', comName: 'Rufous Hummingbird', sciName: 'Selasphorus rufus', nearbyCount: 0 },
+];
+
+const HOTSPOTS = [
+  { id: 'L100', name: 'Mercer Slough Nature Park', lat: 47.6234, lng: -122.2541, numSpeciesAllTime: 187 },
+  { id: 'L101', name: 'Marymoor Park', lat: 47.6441, lng: -122.1301, numSpeciesAllTime: 241 },
+  { id: 'L102', name: 'Cougar Mountain Regional Park', lat: 47.6933, lng: -122.2011, numSpeciesAllTime: 142 },
+  { id: 'L103', name: 'Bridle Trails State Park', lat: 47.6711, lng: -122.1843, numSpeciesAllTime: 119 },
+  { id: 'L104', name: 'Kelsey Creek Park', lat: 47.6801, lng: -122.1502, numSpeciesAllTime: 98 },
+];
+
+// Life list — species the user has already seen
+const LIFE_LIST = [
+  'mouqua','sabgul','amecro','rtbhaw','norfli','stejay','whcspa','annhum',
+  'bkcchi','dowwoo','haiwoo','bewwre','sonspa','spospa','amerob','eurwcgl',
+];
+
+const LIFE_META = {
+  mouqua: { comName: 'Mountain Quail', sciName: 'Oreortyx pictus', firstDate: '2023-05-14', firstLocation: 'Columbia River Gorge', totalCount: 3 },
+  sabgul: { comName: "Sabine's Gull", sciName: 'Xema sabini', firstDate: '2024-09-22', firstLocation: 'Ocean Shores', totalCount: 1 },
+  amecro: { comName: 'American Crow', sciName: 'Corvus brachyrhynchos', firstDate: '2019-04-03', firstLocation: 'Seattle, WA', totalCount: 182 },
+  rtbhaw: { comName: 'Red-tailed Hawk', sciName: 'Buteo jamaicensis', firstDate: '2019-05-11', firstLocation: 'Discovery Park', totalCount: 47 },
+  norfli: { comName: 'Northern Flicker', sciName: 'Colaptes auratus', firstDate: '2020-02-18', firstLocation: 'Lincoln Park', totalCount: 38 },
+  stejay: { comName: "Steller's Jay", sciName: 'Cyanocitta stelleri', firstDate: '2020-03-05', firstLocation: 'Snoqualmie Falls', totalCount: 52 },
+  whcspa: { comName: 'White-crowned Sparrow', sciName: 'Zonotrichia leucophrys', firstDate: '2020-04-22', firstLocation: 'Alki Beach', totalCount: 29 },
+  annhum: { comName: "Anna's Hummingbird", sciName: 'Calypte anna', firstDate: '2019-07-18', firstLocation: 'Home Feeder', totalCount: 94 },
+  bkcchi: { comName: 'Black-capped Chickadee', sciName: 'Poecile atricapillus', firstDate: '2019-04-03', firstLocation: 'Seattle, WA', totalCount: 167 },
+  dowwoo: { comName: 'Downy Woodpecker', sciName: 'Dryobates pubescens', firstDate: '2019-06-12', firstLocation: 'Seward Park', totalCount: 42 },
+  haiwoo: { comName: 'Hairy Woodpecker', sciName: 'Dryobates villosus', firstDate: '2021-01-08', firstLocation: 'Cougar Mountain', totalCount: 11 },
+  bewwre: { comName: "Bewick's Wren", sciName: 'Thryomanes bewickii', firstDate: '2020-05-19', firstLocation: 'Magnuson Park', totalCount: 38 },
+  sonspa: { comName: 'Song Sparrow', sciName: 'Melospiza melodia', firstDate: '2019-04-15', firstLocation: 'Green Lake', totalCount: 112 },
+  spospa: { comName: 'Spotted Sandpiper', sciName: 'Actitis macularius', firstDate: '2022-06-02', firstLocation: 'Juanita Bay Park', totalCount: 8 },
+  amerob: { comName: 'American Robin', sciName: 'Turdus migratorius', firstDate: '2019-04-03', firstLocation: 'Seattle, WA', totalCount: 214 },
+  eurwcgl: { comName: 'European Starling', sciName: 'Sturnus vulgaris', firstDate: '2019-04-03', firstLocation: 'Seattle, WA', totalCount: 103 },
+};
+
+function fmtTimeAgo(iso) {
+  const ms = Date.now() - new Date(iso).getTime();
+  const m = Math.floor(ms / 60000);
+  if (m < 1) return 'just now';
+  if (m < 60) return `${m}m ago`;
+  const h = Math.floor(m / 60);
+  if (h < 24) return `${h}h ago`;
+  const d = Math.floor(h / 24);
+  return `${d}d ago`;
+}
+
+function fmtDist(km) {
+  if (km < 1) return `${Math.round(km * 1000)} m`;
+  if (km < 10) return `${km.toFixed(1)} km`;
+  return `${Math.round(km)} km`;
+}
+
+function fmtDate(str) {
+  const [y,m,d] = str.split('-');
+  const months = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+  return `${months[parseInt(m)-1]} ${parseInt(d)}, ${y}`;
+}
+
+Object.assign(window, {
+  USER, OBS, TARGETS, HOTSPOTS, LIFE_LIST, LIFE_META,
+  kmBetween, bearingTo, cardinal, fmtTimeAgo, fmtDist, fmtDate,
+});

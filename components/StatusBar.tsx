@@ -1,6 +1,7 @@
 'use client';
 
 import type { ClassifiedObservation } from '@/lib/ebird';
+import { getTheme } from '@/lib/theme';
 
 interface Props {
   observations: ClassifiedObservation[];
@@ -13,65 +14,49 @@ interface Props {
 }
 
 export default function StatusBar({ observations, loading, apiStatus, lastFetch, lightMode, yearListActive, isMobile }: Props) {
-  const total = observations.length;
-  const uniqueSpecies = new Set(observations.map((o) => o.speciesCode)).size;
-  const liferOps = observations.filter(
-    (o) => o.tier === 'lifer' || o.tier === 'lifer-rare'
-  ).length;
+  const t = getTheme(lightMode);
 
-  const lastFetchStr =
-    lastFetch > 0
-      ? new Date(lastFetch).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
-      : '—';
+  const total = observations.length;
+  const uniqueSpecies = new Set(observations.map(o => o.speciesCode)).size;
+  const liferOps = observations.filter(o => o.tier === 'lifer' || o.tier === 'lifer-rare').length;
+
+  const lastFetchStr = lastFetch > 0
+    ? new Date(lastFetch).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+    : '—';
+
+  const statusColor = loading
+    ? t.accent
+    : apiStatus === 'ok' ? t.accent
+    : apiStatus === 'error' ? '#EF4444'
+    : t.fg4;
+
+  const containerStyle: React.CSSProperties = {
+    position: 'absolute',
+    top: 12,
+    left: '50%',
+    transform: 'translateX(-50%)',
+    zIndex: 1000,
+    display: 'flex',
+    alignItems: 'center',
+    gap: 1,
+    background: t.cardBg,
+    border: `1px solid ${t.line2}`,
+    borderRadius: 8,
+    backdropFilter: 'blur(8px)',
+    boxShadow: t.shadowLg,
+    fontFamily: t.mono,
+    whiteSpace: 'nowrap',
+  };
 
   if (isMobile) {
-    // Compact single-row format for mobile
-    const statusDot = (
-      <span
-        style={{
-          width: 6,
-          height: 6,
-          borderRadius: '50%',
-          background:
-            loading
-              ? '#f5a623'
-              : apiStatus === 'ok'
-              ? '#3ecfb4'
-              : apiStatus === 'error'
-              ? '#ef4444'
-              : '#4b5563',
-          display: 'inline-block',
-          flexShrink: 0,
-          boxShadow: apiStatus === 'ok' && !loading ? '0 0 4px #3ecfb4' : undefined,
-        }}
-      />
-    );
-
     return (
-      <div
-        style={{
-          position: 'absolute',
-          top: 10,
-          left: '50%',
-          transform: 'translateX(-50%)',
-          zIndex: 1000,
-          display: 'flex',
-          alignItems: 'center',
-          gap: 8,
-          background: lightMode ? 'rgba(240,244,248,0.92)' : 'rgba(10,14,20,0.88)',
-          border: lightMode ? '1px solid rgba(0,0,0,0.1)' : '1px solid rgba(255,255,255,0.08)',
-          borderRadius: 6,
-          backdropFilter: 'blur(8px)',
-          padding: '4px 10px',
-          fontFamily: 'var(--font-jb-mono, monospace)',
-          fontSize: 10,
-          whiteSpace: 'nowrap',
-          boxShadow: '0 2px 12px rgba(0,0,0,0.4)',
-        }}
-      >
-        {statusDot}
-        <span style={{ color: '#aabbcc' }}>
-          <span style={{ color: '#f5a623', fontWeight: 700 }}>{liferOps}</span>
+      <div style={{ ...containerStyle, padding: '5px 10px', fontSize: 11, gap: 6 }}>
+        <span style={{
+          width: 6, height: 6, borderRadius: '50%', background: statusColor,
+          display: 'inline-block', flexShrink: 0,
+        }}/>
+        <span style={{ color: t.fg2 }}>
+          <span style={{ color: t.accent, fontWeight: 700 }}>{liferOps}</span>
           {' '}new · {uniqueSpecies} spp · {total} obs
         </span>
       </div>
@@ -79,88 +64,47 @@ export default function StatusBar({ observations, loading, apiStatus, lastFetch,
   }
 
   return (
-    <div
-      style={{
-        position: 'absolute',
-        top: 12,
-        left: '50%',
-        transform: 'translateX(-50%)',
-        zIndex: 1000,
-        display: 'flex',
-        alignItems: 'center',
-        gap: 2,
-        background: lightMode ? 'rgba(240,244,248,0.92)' : 'rgba(10,14,20,0.88)',
-        border: lightMode ? '1px solid rgba(0,0,0,0.1)' : '1px solid rgba(255,255,255,0.08)',
-        borderRadius: 6,
-        backdropFilter: 'blur(8px)',
-        padding: '5px 14px',
-        fontFamily: 'var(--font-jb-mono, monospace)',
-        fontSize: 12,
-        whiteSpace: 'nowrap',
-        boxShadow: '0 2px 16px rgba(0,0,0,0.5)',
-      }}
-    >
-      <Stat label="SIGHTINGS" value={total} color="#aabbcc" />
-      <Divider />
-      <Stat label="SPECIES" value={uniqueSpecies} color="#aabbcc" />
-      <Divider />
-      <Stat label={yearListActive ? 'YEAR NEW' : 'LIFERS'} value={liferOps} color="#f5a623" />
-      <Divider />
-      <div style={{ display: 'flex', alignItems: 'center', gap: 5 }}>
-        <span
-          style={{
-            width: 7,
-            height: 7,
-            borderRadius: '50%',
-            background:
-              loading
-                ? '#f5a623'
-                : apiStatus === 'ok'
-                ? '#3ecfb4'
-                : apiStatus === 'error'
-                ? '#ef4444'
-                : '#4b5563',
-            display: 'inline-block',
-            boxShadow:
-              apiStatus === 'ok' && !loading
-                ? '0 0 4px #3ecfb4'
-                : undefined,
-          }}
-        />
-        <span style={{ color: '#556677', fontSize: 11 }}>
-          {loading ? 'FETCHING…' : lastFetch > 0 ? lastFetchStr : 'READY'}
+    <div style={{ ...containerStyle, padding: '5px 14px', fontSize: 12 }}>
+      <StatPill label="Sightings" value={total} t={t}/>
+      <Divider t={t}/>
+      <StatPill label="Species" value={uniqueSpecies} t={t}/>
+      <Divider t={t}/>
+      <StatPill
+        label={yearListActive ? 'Year New' : 'Lifers'}
+        value={liferOps}
+        t={t}
+        accent
+      />
+      <Divider t={t}/>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '0 8px' }}>
+        <span style={{
+          width: 6, height: 6, borderRadius: '50%', background: statusColor,
+          display: 'inline-block', flexShrink: 0,
+        }}/>
+        <span style={{ color: t.fg3, fontSize: 11 }}>
+          {loading ? 'Fetching…' : lastFetch > 0 ? lastFetchStr : 'Ready'}
         </span>
       </div>
     </div>
   );
 }
 
-function Stat({
-  label,
-  value,
-  color,
-}: {
+function StatPill({ label, value, t, accent }: {
   label: string;
   value: number;
-  color: string;
+  t: ReturnType<typeof getTheme>;
+  accent?: boolean;
 }) {
   return (
     <div style={{ display: 'flex', alignItems: 'baseline', gap: 5, padding: '0 8px' }}>
-      <span style={{ color: '#445566', fontSize: 10, letterSpacing: '0.08em' }}>{label}</span>
-      <span style={{ color, fontWeight: 700, fontSize: 14 }}>{value}</span>
+      <span style={{ color: t.fg3, fontSize: 10, letterSpacing: '0.04em' }}>{label}</span>
+      <span style={{ color: accent ? t.accent : t.fg0, fontWeight: 700, fontSize: 14 }}>{value}</span>
     </div>
   );
 }
 
-function Divider() {
+function Divider({ t }: { t: ReturnType<typeof getTheme> }) {
   return (
-    <div
-      style={{
-        width: 1,
-        height: 16,
-        background: 'rgba(255,255,255,0.08)',
-        flexShrink: 0,
-      }}
-    />
+    <div style={{ width: 1, height: 14, background: t.line3, flexShrink: 0 }}/>
   );
 }

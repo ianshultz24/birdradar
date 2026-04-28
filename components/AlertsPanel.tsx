@@ -2,8 +2,9 @@
 
 import { useState } from 'react';
 import type { ClassifiedObservation, TargetSpecies } from '@/lib/ebird';
-import { timeAgo } from '@/lib/ebird';
-import { getTierColor, getTierLabel } from '@/lib/classify';
+import { timeAgo, fmtDist } from '@/lib/ebird';
+import { getTheme, tierTokens, tierLabel, type Theme } from '@/lib/theme';
+import { SearchIcon, XIcon, MapPinIcon, TargetIcon } from '@/components/Icons';
 
 function haversineKm(lat1: number, lng1: number, lat2: number, lng2: number): number {
   const R = 6371;
@@ -20,6 +21,7 @@ interface Props {
   targetSpecies: TargetSpecies[];
   yearListActive: boolean;
   lightMode: boolean;
+  useMetric?: boolean;
   userCenter: [number, number];
   focusedSpecies: { code: string; name: string } | null;
   onFlyTo: (lat: number, lng: number) => void;
@@ -27,17 +29,13 @@ interface Props {
 }
 
 export default function AlertsPanel({
-  observations,
-  targetSpecies,
-  yearListActive,
-  lightMode,
-  userCenter,
-  focusedSpecies,
-  onFlyTo,
-  onFocusSpecies,
+  observations, targetSpecies, yearListActive, lightMode, useMetric = true,
+  userCenter, focusedSpecies, onFlyTo, onFocusSpecies,
 }: Props) {
   const [sortBy, setSortBy] = useState<'recent' | 'closest'>('recent');
   const [searchQuery, setSearchQuery] = useState('');
+  const [hoveredSort, setHoveredSort] = useState<'recent' | 'closest' | null>(null);
+  const t = getTheme(lightMode);
 
   function sortObs(arr: ClassifiedObservation[]): ClassifiedObservation[] {
     if (sortBy === 'closest') {
@@ -50,15 +48,13 @@ export default function AlertsPanel({
     return [...arr].sort((a, b) => new Date(b.obsDt).getTime() - new Date(a.obsDt).getTime());
   }
 
-  // Merge lifer-rare and lifer, sorted
-  const liferAll = sortObs(observations.filter((o) => o.tier === 'lifer-rare' || o.tier === 'lifer'));
-  const rare = sortObs(observations.filter((o) => o.tier === 'rare'));
-  const recent = sortObs(observations.filter((o) => o.tier === 'seen'));
+  const liferAll = sortObs(observations.filter(o => o.tier === 'lifer-rare' || o.tier === 'lifer'));
+  const rare = sortObs(observations.filter(o => o.tier === 'rare'));
+  const seen = sortObs(observations.filter(o => o.tier === 'seen'));
 
-  // Fly to the most recent observation matching a target species code
   function flyToTarget(speciesCode: string) {
-    const matches = observations.filter((o) => o.speciesCode === speciesCode);
-    if (matches.length === 0) return;
+    const matches = observations.filter(o => o.speciesCode === speciesCode);
+    if (!matches.length) return;
     const best = matches.reduce((a, b) =>
       new Date(a.obsDt).getTime() >= new Date(b.obsDt).getTime() ? a : b
     );
@@ -67,618 +63,333 @@ export default function AlertsPanel({
 
   const liferSectionTitle = yearListActive ? 'Year Opportunities' : 'Lifer Opportunities';
 
-  const tabInactive = lightMode ? '#718096' : '#445566';
-  const tabActive = '#f5a623';
-  const focusBannerBg = lightMode ? 'rgba(62,207,180,0.1)' : 'rgba(62,207,180,0.08)';
-  const focusBannerBorder = lightMode ? 'rgba(62,207,180,0.3)' : 'rgba(62,207,180,0.2)';
-  const focusTextPrimary = lightMode ? '#1a2332' : '#ddeeff';
-
-  // ─── Species search ─────────────────────────────────────────────────────────
   const searchActive = searchQuery.trim().length > 0;
   const searchResults = searchActive
     ? [...observations]
-        .filter((o) => {
+        .filter(o => {
           const q = searchQuery.trim().toLowerCase();
           return o.comName.toLowerCase().includes(q) || o.sciName.toLowerCase().includes(q);
         })
         .sort((a, b) => new Date(b.obsDt).getTime() - new Date(a.obsDt).getTime())
     : [];
 
-  const inputBg = lightMode ? 'rgba(0,0,0,0.05)' : 'rgba(255,255,255,0.06)';
-  const inputBorder = lightMode ? 'rgba(0,0,0,0.12)' : 'rgba(255,255,255,0.1)';
-  const inputText = lightMode ? '#1a2332' : '#ccddef';
-  const placeholderStyle = lightMode ? '#94a3b8' : '#445566';
-
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 0, height: '100%', overflowY: 'auto' }}>
+    <div style={{ display: 'flex', flexDirection: 'column', height: '100%', overflowY: 'auto', background: t.bg1 }}>
 
-      {/* Species search bar */}
+      {/* Search + sort controls */}
       <div style={{
-        padding: '8px 12px',
-        borderBottom: `1px solid ${lightMode ? 'rgba(0,0,0,0.06)' : 'rgba(255,255,255,0.05)'}`,
+        padding: '12px 16px',
+        borderBottom: `1px solid ${t.line1}`,
         flexShrink: 0,
-        position: 'sticky',
-        top: 0,
-        zIndex: 2,
-        background: lightMode ? '#f4f6f8' : '#0a0e14',
+        position: 'sticky', top: 0, zIndex: 2,
+        background: t.bg1,
       }}>
-        <div style={{ position: 'relative' }}>
-          <span style={{
-            position: 'absolute', left: 9, top: '50%', transform: 'translateY(-50%)',
-            fontSize: 13, color: placeholderStyle, pointerEvents: 'none',
-          }}>🔍</span>
+        <div style={{ position: 'relative', marginBottom: searchActive ? 0 : 10 }}>
+          <SearchIcon size={14} style={{ position: 'absolute', left: 10, top: '50%', transform: 'translateY(-50%)', color: t.fg3 }}/>
           <input
             type="text"
             value={searchQuery}
-            onChange={(e) => setSearchQuery(e.target.value)}
+            onChange={e => setSearchQuery(e.target.value)}
             placeholder="Search species nearby…"
             style={{
-              width: '100%',
-              background: inputBg,
-              border: `1px solid ${searchActive ? '#60a5fa66' : inputBorder}`,
-              borderRadius: 5,
-              padding: '6px 30px 6px 28px',
-              color: inputText,
-              fontSize: 12,
-              outline: 'none',
-              boxSizing: 'border-box',
-              fontFamily: 'var(--font-dm-sans, sans-serif)',
-              transition: 'border-color 0.15s',
+              width: '100%', padding: '9px 32px 9px 32px',
+              fontSize: 13, fontFamily: t.sans,
+              background: t.bg2,
+              border: `1px solid ${searchActive ? t.accentBorder : t.line2}`,
+              borderRadius: 8, outline: 'none', color: t.fg0,
+              boxSizing: 'border-box', transition: 'border-color 0.15s',
             }}
           />
           {searchActive && (
-            <button
-              onClick={() => setSearchQuery('')}
-              style={{
-                position: 'absolute', right: 7, top: '50%', transform: 'translateY(-50%)',
-                background: 'transparent', border: 'none', cursor: 'pointer',
-                color: placeholderStyle, fontSize: 14, lineHeight: 1, padding: '0 2px',
-              }}
-              aria-label="Clear search"
-            >✕</button>
+            <button onClick={() => setSearchQuery('')} style={{
+              position: 'absolute', right: 9, top: '50%', transform: 'translateY(-50%)',
+              background: 'transparent', border: 'none', cursor: 'pointer',
+              color: t.fg3, padding: '0 2px',
+            }}>
+              <XIcon size={14}/>
+            </button>
           )}
         </div>
+
+        {!searchActive && (
+          <div style={{
+            display: 'flex', border: `1px solid ${t.line2}`,
+            borderRadius: 8, overflow: 'hidden',
+          }}>
+            {(['recent', 'closest'] as const).map(s => (
+              <button
+                key={s}
+                onClick={() => setSortBy(s)}
+                onMouseEnter={() => setHoveredSort(s)}
+                onMouseLeave={() => setHoveredSort(null)}
+                style={{
+                  flex: 1, padding: '7px 0',
+                  background: sortBy === s ? t.accentBg : hoveredSort === s ? t.bg2 : 'transparent',
+                  border: 'none',
+                  color: sortBy === s ? t.accent : t.fg2,
+                  fontSize: 12, fontWeight: sortBy === s ? 600 : 400,
+                  cursor: 'pointer', fontFamily: t.sans,
+                  transition: 'all 0.12s',
+                }}>
+                {s === 'recent' ? 'Most Recent' : 'Closest'}
+              </button>
+            ))}
+          </div>
+        )}
       </div>
 
-      {/* Search results view */}
-      {searchActive && (
-        <div>
-          {searchResults.length === 0 ? (
-            <div style={{
-              padding: '20px 14px',
-              fontSize: 12,
-              color: lightMode ? '#94a3b8' : '#334455',
-              fontStyle: 'italic',
-              textAlign: 'center',
-            }}>
-              No species matching "{searchQuery.trim()}" in current radius
-            </div>
-          ) : (
-            <>
-              <div style={{
-                padding: '6px 14px 4px',
-                fontSize: 10,
-                fontFamily: 'var(--font-jb-mono, monospace)',
-                letterSpacing: '0.1em',
-                color: lightMode ? '#718096' : '#445566',
-                fontWeight: 700,
-                textTransform: 'uppercase',
-              }}>
-                {searchResults.length} sighting{searchResults.length !== 1 ? 's' : ''} · most recent first
-              </div>
-              {searchResults.map((obs) => (
-                <AlertCard
-                  key={`search|${obs.speciesCode}|${obs.locId || obs.locName}`}
-                  obs={obs}
-                  yearListActive={yearListActive}
-                  isFocused={focusedSpecies?.code === obs.speciesCode}
-                  isDimmed={false}
-                  onFlyTo={onFlyTo}
-                  onFocusSpecies={onFocusSpecies}
-                  lightMode={lightMode}
-                  distKm={haversineKm(userCenter[0], userCenter[1], obs.lat, obs.lng)}
-                />
-              ))}
-            </>
-          )}
-        </div>
-      )}
-
-      {/* Normal content — hidden when search is active */}
-      {!searchActive && <>
-
-      {/* Species focus banner */}
-      {focusedSpecies && (
-        <div
-          style={{
-            display: 'flex',
-            alignItems: 'center',
-            gap: 8,
-            padding: '8px 14px',
-            background: focusBannerBg,
-            borderBottom: `1px solid ${focusBannerBorder}`,
-            flexShrink: 0,
-          }}
-        >
-          <span style={{ fontSize: 14 }}>🎯</span>
-          <span
-            style={{
-              flex: 1,
-              fontSize: 12,
-              fontWeight: 700,
-              color: '#3ecfb4',
-              fontFamily: 'var(--font-jb-mono, monospace)',
-              letterSpacing: '0.04em',
-              overflow: 'hidden',
-              textOverflow: 'ellipsis',
-              whiteSpace: 'nowrap',
-            }}
-          >
-            {focusedSpecies.name}
-          </span>
-          <button
-            onClick={() => onFocusSpecies(focusedSpecies.code, focusedSpecies.name)}
-            style={{
-              background: 'transparent',
-              border: 'none',
-              color: focusTextPrimary,
-              cursor: 'pointer',
-              fontSize: 13,
-              opacity: 0.6,
-              padding: '0 2px',
-              flexShrink: 0,
-            }}
-            aria-label="Clear focus"
-          >
-            ✕
+      {/* Focus banner */}
+      {focusedSpecies && !searchActive && (
+        <div style={{
+          display: 'flex', alignItems: 'center', gap: 8, padding: '9px 16px',
+          background: t.accentBg, borderBottom: `1px solid ${t.accentBorder}`, flexShrink: 0,
+        }}>
+          <TargetIcon size={13} style={{ color: t.accent, flexShrink: 0 }}/>
+          <span style={{
+            flex: 1, fontSize: 12, fontWeight: 600, color: t.accent,
+            fontFamily: t.mono, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+          }}>{focusedSpecies.name}</span>
+          <button onClick={() => onFocusSpecies(focusedSpecies.code, focusedSpecies.name)} style={{
+            background: 'transparent', border: 'none', cursor: 'pointer',
+            color: t.fg3, padding: '0 2px', lineHeight: 1,
+          }}>
+            <XIcon size={13}/>
           </button>
         </div>
       )}
 
-      {/* Sort toggle */}
-      <div style={{ display: 'flex', gap: 0, borderBottom: `1px solid ${lightMode ? 'rgba(0,0,0,0.06)' : 'rgba(255,255,255,0.05)'}`, flexShrink: 0 }}>
-        {(['recent', 'closest'] as const).map((opt) => {
-          const active = sortBy === opt;
-          return (
-            <button
-              key={opt}
-              onClick={() => setSortBy(opt)}
-              style={{
-                flex: 1,
-                padding: '7px 0',
-                background: 'transparent',
-                border: 'none',
-                borderBottom: `2px solid ${active ? tabActive : 'transparent'}`,
-                color: active ? tabActive : tabInactive,
-                fontSize: 11,
-                fontWeight: active ? 700 : 400,
-                cursor: 'pointer',
-                letterSpacing: '0.06em',
-                fontFamily: 'var(--font-jb-mono, monospace)',
-                transition: 'color 0.15s',
-              }}
-            >
-              {opt === 'recent' ? '⏱ MOST RECENT' : '📍 CLOSEST'}
-            </button>
-          );
-        })}
-      </div>
+      {/* Search results */}
+      {searchActive ? (
+        <div>
+          <SectionHeader title={`${searchResults.length} result${searchResults.length !== 1 ? 's' : ''}`} count={-1} t={t}/>
+          {searchResults.length === 0 ? (
+            <EmptyState text={`No species matching "${searchQuery.trim()}"`} t={t}/>
+          ) : (
+            searchResults.map(obs => (
+              <ObsCard
+                key={`s-${obs.speciesCode}-${obs.locId ?? obs.locName}`}
+                obs={obs} t={t} yearListActive={yearListActive}
+                focusedCode={focusedSpecies?.code ?? null}
+                onFlyTo={onFlyTo} onFocusSpecies={onFocusSpecies}
+                distKm={haversineKm(userCenter[0], userCenter[1], obs.lat, obs.lng)}
+                useMetric={useMetric}
+              />
+            ))
+          )}
+        </div>
+      ) : (
+        <>
+          {targetSpecies.length > 0 && (
+            <>
+              <SectionHeader title="Target Species" count={targetSpecies.length} t={t} dotColor={t.target}/>
+              {targetSpecies.slice(0, 10).map(sp => (
+                <TargetCard key={sp.speciesCode} sp={sp} t={t}
+                  isFocused={focusedSpecies?.code === sp.speciesCode}
+                  isDimmed={!!focusedSpecies && focusedSpecies.code !== sp.speciesCode}
+                  onFlyTo={() => flyToTarget(sp.speciesCode)}
+                  onFocusSpecies={onFocusSpecies}
+                />
+              ))}
+            </>
+          )}
 
-      {/* Target Species */}
-      {targetSpecies.length > 0 && (
-        <Section
-          title="Target Species"
-          count={targetSpecies.length}
-          accent="#3ecfb4"
-          empty=""
-          lightMode={lightMode}
-        >
-          {targetSpecies.slice(0, 10).map((sp) => (
-            <TargetCard
-              key={sp.speciesCode}
-              sp={sp}
-              isFocused={focusedSpecies?.code === sp.speciesCode}
-              isDimmed={!!focusedSpecies && focusedSpecies.code !== sp.speciesCode}
-              onFlyTo={() => flyToTarget(sp.speciesCode)}
-              onFocusSpecies={onFocusSpecies}
-              lightMode={lightMode}
-            />
-          ))}
-        </Section>
+          <SectionHeader title={liferSectionTitle} count={liferAll.length} t={t} dotColor={t.lifer}/>
+          {liferAll.length === 0
+            ? <EmptyState text={yearListActive ? 'No new species this year nearby' : 'No lifers nearby'} t={t}/>
+            : liferAll.map(obs => (
+              <ObsCard key={`${obs.speciesCode}|${obs.locId ?? obs.locName}`}
+                obs={obs} t={t} yearListActive={yearListActive}
+                focusedCode={focusedSpecies?.code ?? null}
+                onFlyTo={onFlyTo} onFocusSpecies={onFocusSpecies}
+                distKm={sortBy === 'closest' ? haversineKm(userCenter[0], userCenter[1], obs.lat, obs.lng) : undefined}
+                useMetric={useMetric}
+              />
+            ))}
+
+          <SectionHeader title="Rare — Already Seen" count={rare.length} t={t} dotColor={t.rare}/>
+          {rare.length === 0
+            ? <EmptyState text="No rare species nearby" t={t}/>
+            : rare.map(obs => (
+              <ObsCard key={`${obs.speciesCode}|${obs.locId ?? obs.locName}`}
+                obs={obs} t={t} yearListActive={yearListActive}
+                focusedCode={focusedSpecies?.code ?? null}
+                onFlyTo={onFlyTo} onFocusSpecies={onFocusSpecies}
+                distKm={sortBy === 'closest' ? haversineKm(userCenter[0], userCenter[1], obs.lat, obs.lng) : undefined}
+                useMetric={useMetric}
+              />
+            ))}
+
+          <SectionHeader title="Seen Nearby" count={seen.length} t={t} dotColor={t.seen}/>
+          {seen.length === 0
+            ? <EmptyState text="No previously seen species nearby" t={t}/>
+            : seen.map(obs => (
+              <ObsCard key={`${obs.speciesCode}|${obs.locId ?? obs.locName}`}
+                obs={obs} t={t} yearListActive={yearListActive}
+                focusedCode={focusedSpecies?.code ?? null}
+                onFlyTo={onFlyTo} onFocusSpecies={onFocusSpecies}
+                distKm={sortBy === 'closest' ? haversineKm(userCenter[0], userCenter[1], obs.lat, obs.lng) : undefined}
+                useMetric={useMetric}
+              />
+            ))}
+        </>
       )}
-
-      {/* Lifer / Year Opportunities */}
-      <Section
-        title={liferSectionTitle}
-        count={liferAll.length}
-        accent="#60a5fa"
-        empty={yearListActive ? 'No new species this year nearby' : 'No lifers nearby'}
-        lightMode={lightMode}
-      >
-        {liferAll.map((obs) => (
-          <AlertCard
-            key={`${obs.speciesCode}|${obs.locId || obs.locName}`}
-            obs={obs}
-            yearListActive={yearListActive}
-            isFocused={focusedSpecies?.code === obs.speciesCode}
-            isDimmed={!!focusedSpecies && focusedSpecies.code !== obs.speciesCode}
-            onFlyTo={onFlyTo}
-            onFocusSpecies={onFocusSpecies}
-            lightMode={lightMode}
-            distKm={sortBy === 'closest' ? haversineKm(userCenter[0], userCenter[1], obs.lat, obs.lng) : undefined}
-          />
-        ))}
-      </Section>
-
-      {/* Rare Seen Nearby */}
-      <Section
-        title="Rare Seen Nearby"
-        count={rare.length}
-        accent="#94a3b8"
-        empty="No rare species nearby"
-        lightMode={lightMode}
-      >
-        {rare.map((obs) => (
-          <AlertCard
-            key={`${obs.speciesCode}|${obs.locId || obs.locName}`}
-            obs={obs}
-            yearListActive={yearListActive}
-            isFocused={focusedSpecies?.code === obs.speciesCode}
-            isDimmed={!!focusedSpecies && focusedSpecies.code !== obs.speciesCode}
-            onFlyTo={onFlyTo}
-            onFocusSpecies={onFocusSpecies}
-            lightMode={lightMode}
-            distKm={sortBy === 'closest' ? haversineKm(userCenter[0], userCenter[1], obs.lat, obs.lng) : undefined}
-          />
-        ))}
-      </Section>
-
-      {/* Already Seen Nearby */}
-      <Section
-        title="Already Seen Nearby"
-        count={recent.length}
-        accent="#6b7280"
-        empty="No previously seen species nearby"
-        lightMode={lightMode}
-      >
-        {recent.map((obs) => (
-          <AlertCard
-            key={`${obs.speciesCode}|${obs.locId || obs.locName}`}
-            obs={obs}
-            yearListActive={yearListActive}
-            isFocused={focusedSpecies?.code === obs.speciesCode}
-            isDimmed={!!focusedSpecies && focusedSpecies.code !== obs.speciesCode}
-            onFlyTo={onFlyTo}
-            onFocusSpecies={onFocusSpecies}
-            lightMode={lightMode}
-            distKm={sortBy === 'closest' ? haversineKm(userCenter[0], userCenter[1], obs.lat, obs.lng) : undefined}
-          />
-        ))}
-      </Section>
-
-      {/* End of normal (non-search) content */}
-      </>}
     </div>
   );
 }
 
-// ─── Section ────────────────────────────────────────────────────────────────
+// ─── Section header ──────────────────────────────────────────────────────────
 
-function Section({
-  title,
-  count,
-  accent,
-  empty,
-  lightMode,
-  children,
-}: {
-  title: string;
-  count: number;
-  accent: string;
-  empty: string;
-  lightMode: boolean;
-  children: React.ReactNode;
-}) {
-  const border = lightMode ? 'rgba(0,0,0,0.06)' : 'rgba(255,255,255,0.05)';
-  const headerBg = lightMode ? 'rgba(0,0,0,0.02)' : 'rgba(255,255,255,0.02)';
-  const labelColor = lightMode ? '#4a5568' : '#8899aa';
-  const emptyColor = lightMode ? '#a0aec0' : '#334455';
-
+function SectionHeader({ title, count, t, dotColor }: { title: string; count: number; t: Theme; dotColor?: string }) {
   return (
-    <div style={{ borderBottom: `1px solid ${border}` }}>
-      <div
-        style={{
-          display: 'flex',
-          alignItems: 'center',
-          gap: 8,
-          padding: '10px 14px 8px',
-          background: headerBg,
-          position: 'sticky',
-          top: 0,
-          zIndex: 1,
-        }}
-      >
-        <div style={{ width: 3, height: 14, borderRadius: 2, background: accent, flexShrink: 0 }} />
-        <span
-          style={{
-            fontSize: 11,
-            fontWeight: 700,
-            letterSpacing: '0.1em',
-            color: labelColor,
-            fontFamily: 'var(--font-jb-mono, monospace)',
-            textTransform: 'uppercase',
-          }}
-        >
-          {title}
-        </span>
-        <span
-          style={{
-            marginLeft: 'auto',
-            fontSize: 11,
-            color: accent,
-            fontFamily: 'var(--font-jb-mono, monospace)',
-            fontWeight: 700,
-          }}
-        >
-          {count}
-        </span>
-      </div>
-      <div>
-        {count === 0 ? (
-          <div
-            style={{
-              padding: '12px 14px',
-              fontSize: 12,
-              color: emptyColor,
-              fontStyle: 'italic',
-            }}
-          >
-            {empty}
-          </div>
-        ) : (
-          children
-        )}
-      </div>
+    <div style={{
+      display: 'flex', alignItems: 'center', padding: '10px 16px',
+      background: t.bg2, borderBottom: `1px solid ${t.line1}`,
+      borderTop: `1px solid ${t.line1}`,
+    }}>
+      {dotColor && (
+        <span style={{ width: 7, height: 7, borderRadius: '50%', background: dotColor, marginRight: 9, flexShrink: 0, opacity: 0.85 }}/>
+      )}
+      <span style={{ fontSize: 11, fontWeight: 600, color: t.fg1, letterSpacing: '0.03em', flex: 1, fontFamily: t.sans }}>
+        {title}
+      </span>
+      {count >= 0 && (
+        <span style={{ fontSize: 11, fontFamily: t.mono, color: dotColor ?? t.fg3, fontWeight: 600 }}>{count}</span>
+      )}
     </div>
   );
 }
 
-// ─── Target Species Card ─────────────────────────────────────────────────────
+function EmptyState({ text, t }: { text: string; t: Theme }) {
+  return (
+    <div style={{ padding: '14px 16px', fontSize: 12, color: t.fg3, fontStyle: 'italic', fontFamily: t.sans }}>
+      {text}
+    </div>
+  );
+}
 
-function TargetCard({
-  sp,
-  isFocused,
-  isDimmed,
-  onFlyTo,
-  onFocusSpecies,
-  lightMode,
-}: {
-  sp: TargetSpecies;
-  isFocused: boolean;
-  isDimmed: boolean;
-  onFlyTo: () => void;
+// ─── Observation card ────────────────────────────────────────────────────────
+
+function ObsCard({ obs, t, yearListActive, focusedCode, onFlyTo, onFocusSpecies, distKm, useMetric }: {
+  obs: ClassifiedObservation;
+  t: Theme;
+  yearListActive: boolean;
+  focusedCode: string | null;
+  onFlyTo: (lat: number, lng: number) => void;
   onFocusSpecies: (code: string, name: string) => void;
-  lightMode: boolean;
+  distKm?: number;
+  useMetric?: boolean;
 }) {
-  const accent = '#3ecfb4';
-  const textPrimary = lightMode ? '#1a2332' : '#ddeeff';
-  const textSecondary = lightMode ? '#4a5568' : '#556677';
-  const border = lightMode ? 'rgba(0,0,0,0.04)' : 'rgba(255,255,255,0.04)';
-  const focusedBg = isFocused ? `${accent}15` : 'transparent';
+  const [hov, setHov] = useState(false);
+  const tc = tierTokens(obs.tier, t);
+  const label = tierLabel(obs.tier, yearListActive);
+  const focused = focusedCode === obs.speciesCode;
+  const dimmed = focusedCode !== null && !focused;
 
   return (
     <button
-      onClick={() => {
-        onFlyTo();
-        onFocusSpecies(sp.speciesCode, sp.comName);
-      }}
+      onClick={() => { onFlyTo(obs.lat, obs.lng); onFocusSpecies(obs.speciesCode, obs.comName); }}
+      onMouseEnter={() => setHov(true)}
+      onMouseLeave={() => setHov(false)}
       style={{
-        width: '100%',
-        textAlign: 'left',
-        background: focusedBg,
-        border: 'none',
-        borderLeft: `3px solid ${isFocused ? accent : `${accent}55`}`,
-        padding: '9px 12px',
-        cursor: sp.nearbyCount > 0 ? 'pointer' : 'default',
-        borderBottom: `1px solid ${border}`,
-        transition: 'background 0.15s, opacity 0.15s',
-        opacity: isDimmed ? 0.35 : 1,
-      }}
-      onMouseEnter={(e) => {
-        if (sp.nearbyCount > 0 && !isFocused) (e.currentTarget as HTMLElement).style.background = `${accent}0d`;
-      }}
-      onMouseLeave={(e) => {
-        (e.currentTarget as HTMLElement).style.background = focusedBg;
-      }}
-    >
-      <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 6 }}>
+        width: '100%', textAlign: 'left',
+        background: focused ? tc.bg : hov ? t.bg2 : 'transparent',
+        border: 'none', borderBottom: `1px solid ${t.line1}`,
+        padding: '13px 16px', cursor: 'pointer',
+        opacity: dimmed ? 0.28 : 1,
+        transition: 'all 0.12s', fontFamily: t.sans, display: 'block',
+      }}>
+      <div style={{ display: 'flex', alignItems: 'flex-start', gap: 11 }}>
+        {/* Left indicator bar */}
+        <div style={{
+          width: 2, minHeight: 44, borderRadius: 1,
+          background: focused ? tc.color : t.line3,
+          flexShrink: 0, marginTop: 1,
+        }}/>
+
         <div style={{ flex: 1, minWidth: 0 }}>
-          <div
-            style={{
-              fontSize: 13,
-              fontWeight: 600,
-              color: textPrimary,
-              whiteSpace: 'nowrap',
-              overflow: 'hidden',
-              textOverflow: 'ellipsis',
-              marginBottom: 1,
-            }}
-          >
-            {sp.comName}
+          {/* Name + badge row */}
+          <div style={{ display: 'flex', alignItems: 'center', gap: 7, marginBottom: 2 }}>
+            <span style={{
+              fontSize: 13, fontWeight: 600, color: t.fg0,
+              whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
+              fontFamily: t.display,
+            }}>{obs.comName}</span>
+            <span style={{
+              fontSize: 9.5, fontWeight: 600, fontFamily: t.mono,
+              color: tc.color, background: tc.bg,
+              padding: '2px 6px', borderRadius: 4, border: `1px solid ${tc.border}`,
+              letterSpacing: '0.02em', flexShrink: 0, whiteSpace: 'nowrap',
+            }}>{label}</span>
           </div>
-          <div
-            style={{
-              fontSize: 11,
-              color: textSecondary,
-              fontStyle: 'italic',
-              overflow: 'hidden',
-              textOverflow: 'ellipsis',
-              whiteSpace: 'nowrap',
-            }}
-          >
-            {sp.sciName}
+
+          {/* Scientific name */}
+          <div style={{ fontSize: 11.5, color: t.fg2, fontStyle: 'italic', marginBottom: 7 }}>
+            {obs.sciName}
+          </div>
+
+          {/* Meta row */}
+          <div style={{ display: 'flex', alignItems: 'center', gap: 3, fontSize: 11.5, color: t.fg2, flexWrap: 'wrap' }}>
+            <MapPinIcon size={11} style={{ color: t.fg4, flexShrink: 0 }}/>
+            <span style={{ maxWidth: 150, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+              {obs.locName}
+            </span>
+            {distKm !== undefined && (
+              <>
+                <span style={{ color: t.fg4, margin: '0 2px' }}>·</span>
+                <span style={{ fontFamily: t.mono, fontSize: 10.5, color: t.fg3 }}>{fmtDist(distKm, useMetric)}</span>
+              </>
+            )}
+            <span style={{ color: t.fg4, margin: '0 2px' }}>·</span>
+            <span style={{ fontFamily: t.mono, fontSize: 10.5, color: t.fg3 }}>{timeAgo(obs.obsDt)}</span>
           </div>
         </div>
-        <span
-          style={{
-            fontSize: 9,
-            fontFamily: 'var(--font-jb-mono, monospace)',
-            background: `${accent}1a`,
-            color: accent,
-            border: `1px solid ${accent}33`,
-            borderRadius: 3,
-            padding: '1px 5px',
-            letterSpacing: '0.07em',
-            fontWeight: 700,
-            flexShrink: 0,
-            whiteSpace: 'nowrap',
-          }}
-        >
-          {sp.nearbyCount > 0 ? `${sp.nearbyCount} nearby` : 'EXPECTED'}
-        </span>
       </div>
     </button>
   );
 }
 
-// ─── Alert Card ──────────────────────────────────────────────────────────────
+// ─── Target species card ─────────────────────────────────────────────────────
 
-function AlertCard({
-  obs,
-  yearListActive,
-  isFocused,
-  isDimmed,
-  onFlyTo,
-  onFocusSpecies,
-  lightMode,
-  distKm,
-}: {
-  obs: ClassifiedObservation;
-  yearListActive: boolean;
+function TargetCard({ sp, t, isFocused, isDimmed, onFlyTo, onFocusSpecies }: {
+  sp: TargetSpecies;
+  t: Theme;
   isFocused: boolean;
   isDimmed: boolean;
-  onFlyTo: (lat: number, lng: number) => void;
+  onFlyTo: () => void;
   onFocusSpecies: (code: string, name: string) => void;
-  lightMode: boolean;
-  distKm?: number;
 }) {
-  const color = getTierColor(obs.tier);
-  const baseLabel = getTierLabel(obs.tier);
-  // In year list mode, relabel "LIFER" tiers to "YEAR NEW"
-  const label = yearListActive && obs.tier === 'lifer'
-    ? 'YEAR NEW'
-    : yearListActive && obs.tier === 'lifer-rare'
-    ? 'YEAR + RARE'
-    : yearListActive && obs.tier === 'rare'
-    ? 'RARE SEEN'
-    : baseLabel;
-
-  const textPrimary = lightMode ? '#1a2332' : '#ddeeff';
-  const textSecondary = lightMode ? '#4a5568' : '#556677';
-  const textMuted = lightMode ? '#718096' : '#445566';
-  const border = lightMode ? 'rgba(0,0,0,0.04)' : 'rgba(255,255,255,0.04)';
-  const focusedBg = isFocused ? `${color}12` : 'transparent';
+  const [hov, setHov] = useState(false);
 
   return (
     <button
-      onClick={() => {
-        onFlyTo(obs.lat, obs.lng);
-        onFocusSpecies(obs.speciesCode, obs.comName);
-      }}
+      onClick={() => { onFlyTo(); onFocusSpecies(sp.speciesCode, sp.comName); }}
+      onMouseEnter={() => setHov(true)}
+      onMouseLeave={() => setHov(false)}
       style={{
-        width: '100%',
-        textAlign: 'left',
-        background: focusedBg,
-        border: 'none',
-        borderLeft: `3px solid ${isFocused ? color : `${color}66`}`,
-        padding: '9px 12px 9px 12px',
-        cursor: 'pointer',
-        borderBottom: `1px solid ${border}`,
-        transition: 'background 0.15s, opacity 0.15s',
-        opacity: isDimmed ? 0.35 : 1,
-      }}
-      onMouseEnter={(e) => {
-        if (!isFocused) (e.currentTarget as HTMLElement).style.background = `${color}0d`;
-      }}
-      onMouseLeave={(e) => {
-        (e.currentTarget as HTMLElement).style.background = focusedBg;
-      }}
-    >
-      <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 6 }}>
+        width: '100%', textAlign: 'left',
+        background: isFocused ? t.targetBg : hov ? t.bg2 : 'transparent',
+        border: 'none', borderBottom: `1px solid ${t.line1}`,
+        padding: '12px 16px', cursor: 'pointer',
+        opacity: isDimmed ? 0.28 : 1, transition: 'all 0.12s',
+      }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+        <TargetIcon size={13} style={{ color: t.target, flexShrink: 0 }}/>
         <div style={{ flex: 1, minWidth: 0 }}>
-          <div
-            style={{
-              fontSize: 13,
-              fontWeight: 600,
-              color: textPrimary,
-              whiteSpace: 'nowrap',
-              overflow: 'hidden',
-              textOverflow: 'ellipsis',
-              marginBottom: 1,
-            }}
-          >
-            {obs.comName}
+          <div style={{ fontSize: 13, fontWeight: 600, color: t.fg0, fontFamily: t.display }}>
+            {sp.comName}
           </div>
-          <div
-            style={{
-              fontSize: 11,
-              color: textSecondary,
-              fontStyle: 'italic',
-              whiteSpace: 'nowrap',
-              overflow: 'hidden',
-              textOverflow: 'ellipsis',
-              marginBottom: 4,
-            }}
-          >
-            {obs.sciName}
-          </div>
-          <div
-            style={{
-              fontSize: 11,
-              color: textMuted,
-              whiteSpace: 'nowrap',
-              overflow: 'hidden',
-              textOverflow: 'ellipsis',
-            }}
-          >
-            📍 {obs.locName}
-          </div>
-          {obs.reportCount && obs.reportCount > 1 && (
-            <div style={{ fontSize: 10, color: textMuted, fontFamily: 'var(--font-jb-mono, monospace)', marginTop: 2, opacity: 0.8 }}>
-              {obs.reportCount}× this week
-            </div>
-          )}
+          <div style={{ fontSize: 11.5, color: t.fg2, fontStyle: 'italic' }}>{sp.sciName}</div>
         </div>
-        <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 4, flexShrink: 0 }}>
-          <span
-            style={{
-              fontSize: 9,
-              fontFamily: 'var(--font-jb-mono, monospace)',
-              background: `${color}1a`,
-              color: color,
-              border: `1px solid ${color}33`,
-              borderRadius: 3,
-              padding: '1px 5px',
-              letterSpacing: '0.07em',
-              fontWeight: 700,
-            }}
-          >
-            {label}
-          </span>
-          <span
-            style={{
-              fontSize: 11,
-              color: textMuted,
-              fontFamily: 'var(--font-jb-mono, monospace)',
-            }}
-          >
-            {distKm !== undefined
-              ? distKm < 1
-                ? `${Math.round(distKm * 1000)}m`
-                : `${distKm.toFixed(1)}km`
-              : timeAgo(obs.obsDt)}
-          </span>
-        </div>
+        <span style={{
+          fontSize: 10, fontFamily: t.mono, fontWeight: 600,
+          padding: '3px 8px', borderRadius: 4,
+          color: sp.nearbyCount > 0 ? t.target : t.fg3,
+          background: sp.nearbyCount > 0 ? t.targetBg : 'transparent',
+          border: `1px solid ${sp.nearbyCount > 0 ? t.targetBorder : t.line2}`,
+          flexShrink: 0,
+        }}>
+          {sp.nearbyCount > 0 ? `${sp.nearbyCount} nearby` : 'Expected'}
+        </span>
       </div>
     </button>
   );

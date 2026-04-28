@@ -48,6 +48,8 @@ export interface AppSettings {
   yearListActive: boolean;
   /** stored in km; passed directly to eBird API (max 50) */
   searchRadius: number;
+  /** display unit preference — does NOT affect API calls */
+  useMetric: boolean;
   autoRefresh: 0 | 5 | 15 | 30;
   notificationsEnabled: boolean;
   soundEnabled: boolean;
@@ -62,12 +64,25 @@ export const DEFAULT_SETTINGS: AppSettings = {
   lightMode: false,
   yearListActive: false,
   searchRadius: 25,
+  useMetric: true,
   autoRefresh: 0,
   notificationsEnabled: false,
   soundEnabled: false,
   showRadiusCircle: false,
   showRadarAnimation: false,
 };
+
+export function fmtDist(km: number, useMetric = true): string {
+  if (useMetric) {
+    if (km < 1) return `${Math.round(km * 1000)}m`;
+    if (km < 10) return `${km.toFixed(1)} km`;
+    return `${Math.round(km)} km`;
+  }
+  const mi = km * 0.621371;
+  if (mi < 0.1) return `${Math.round(mi * 5280)} ft`;
+  if (mi < 10) return `${mi.toFixed(1)} mi`;
+  return `${Math.round(mi)} mi`;
+}
 
 export function timeAgo(dateStr: string): string {
   const date = new Date(dateStr.replace(' ', 'T'));

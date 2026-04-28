@@ -5,6 +5,8 @@ import type { ClassifiedObservation } from '@/lib/ebird';
 import { searchSpecies, type SpeciesEntry } from '@/lib/species-data';
 import { PNW_SPECIES } from '@/lib/species-data';
 import type { SpeciesMeta } from '@/lib/lifelist';
+import { getTheme } from '@/lib/theme';
+import { SearchIcon, UploadIcon, XIcon, CheckIcon } from '@/components/Icons';
 
 interface Props {
   lifeList: string[];
@@ -25,9 +27,7 @@ interface Props {
 
 function buildNameMap(observations: ClassifiedObservation[]): Map<string, { comName: string; sciName: string }> {
   const map = new Map<string, { comName: string; sciName: string }>();
-  for (const obs of observations) {
-    map.set(obs.speciesCode, { comName: obs.comName, sciName: obs.sciName });
-  }
+  for (const obs of observations) map.set(obs.speciesCode, { comName: obs.comName, sciName: obs.sciName });
   return map;
 }
 
@@ -43,45 +43,35 @@ function formatDate(dateStr: string): string {
 }
 
 export default function LifeListPanel({
-  lifeList,
-  yearList,
-  lifeListMeta,
-  yearListActive,
-  observations,
-  onAdd,
-  onRemove,
-  onAddToYear,
-  onRemoveFromYear,
-  onToggleYearList,
-  onBulkImport,
-  onClearLifeList,
-  onClearYearList,
-  lightMode,
+  lifeList, yearList, lifeListMeta, yearListActive, observations,
+  onAdd, onRemove, onAddToYear, onRemoveFromYear, onToggleYearList,
+  onBulkImport, onClearLifeList, onClearYearList, lightMode,
 }: Props) {
   const [query, setQuery] = useState('');
   const [results, setResults] = useState<SpeciesEntry[]>([]);
   const [importToast, setImportToast] = useState<string | null>(null);
   const [confirmClear, setConfirmClear] = useState(false);
+  const [hoveredCode, setHoveredCode] = useState<string | null>(null);
+  const [hoveredResult, setHoveredResult] = useState<string | null>(null);
+  const [importHov, setImportHov] = useState(false);
+  const [clearHov, setClearHov] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const t = getTheme(lightMode);
 
   const nameMap = buildNameMap(observations);
-
-  // Which list are we managing?
   const activeList = yearListActive ? yearList : lifeList;
   const addFn = yearListActive ? onAddToYear : onAdd;
   const removeFn = yearListActive ? onRemoveFromYear : onRemove;
 
-  const liferOps = observations.filter(
-    (o) => o.tier === 'lifer' || o.tier === 'lifer-rare'
-  );
-  const uniqueLiferOps = new Set(liferOps.map((o) => o.speciesCode)).size;
+  const liferOps = observations.filter(o => o.tier === 'lifer' || o.tier === 'lifer-rare');
+  const uniqueLiferOps = new Set(liferOps.map(o => o.speciesCode)).size;
 
   function handleSearch(q: string) {
     setQuery(q);
     setResults(q.trim() ? searchSpecies(q) : []);
   }
 
-  // ─── CSV Import ────────────────────────────────────────────────────────────
+  // ─── CSV Import ─────────────────────────────────────────────────────────────
   function handleCSVFile(e: React.ChangeEvent<HTMLInputElement>) {
     const file = e.target.files?.[0];
     if (!file) return;
@@ -92,26 +82,13 @@ export default function LifeListPanel({
       const lines = text.split(/\r?\n/).filter(Boolean);
       if (lines.length < 2) return;
 
-      // Parse header to find column indices
       const header = parseCSVRow(lines[0]);
-      const comNameIdx = header.findIndex(
-        (h) => h.trim().toLowerCase() === 'common name'
-      );
-      const sciNameIdx = header.findIndex(
-        (h) => h.trim().toLowerCase() === 'scientific name'
-      );
-      const taxonCodeIdx = header.findIndex(
-        (h) => h.trim().toLowerCase() === 'taxon code' || h.trim().toLowerCase() === 'species code'
-      );
-      const locationIdx = header.findIndex(
-        (h) => h.trim().toLowerCase() === 'location'
-      );
-      const dateIdx = header.findIndex(
-        (h) => h.trim().toLowerCase() === 'date'
-      );
-      const subIdIdx = header.findIndex(
-        (h) => h.trim().toLowerCase() === 'submission id'
-      );
+      const comNameIdx = header.findIndex(h => h.trim().toLowerCase() === 'common name');
+      const sciNameIdx = header.findIndex(h => h.trim().toLowerCase() === 'scientific name');
+      const taxonCodeIdx = header.findIndex(h => h.trim().toLowerCase() === 'taxon code' || h.trim().toLowerCase() === 'species code');
+      const locationIdx = header.findIndex(h => h.trim().toLowerCase() === 'location');
+      const dateIdx = header.findIndex(h => h.trim().toLowerCase() === 'date');
+      const subIdIdx = header.findIndex(h => h.trim().toLowerCase() === 'submission id');
 
       if (comNameIdx === -1) {
         setImportToast('Could not find "Common Name" column in CSV.');
@@ -119,7 +96,6 @@ export default function LifeListPanel({
         return;
       }
 
-      // Build fallback lookup by comName/sciName for CSVs without a Taxon Code column
       const byComName = new Map<string, SpeciesEntry>();
       const bySciName = new Map<string, SpeciesEntry>();
       for (const sp of PNW_SPECIES) {
@@ -128,15 +104,13 @@ export default function LifeListPanel({
       }
 
       const currentYear = new Date().getFullYear().toString();
-
-      // Aggregate per species: track all rows
       type RowData = { date: string; location: string; subId: string };
       const speciesRows = new Map<string, { comName: string; sciName: string; rows: RowData[] }>();
       const checklistIds = new Set<string>();
 
       for (let i = 1; i < lines.length; i++) {
         const row = parseCSVRow(lines[i]);
-        if (row.length === 0) continue;
+        if (!row.length) continue;
 
         const comName = (row[comNameIdx] ?? '').trim();
         const sciName = sciNameIdx !== -1 ? (row[sciNameIdx] ?? '').trim() : '';
@@ -148,84 +122,38 @@ export default function LifeListPanel({
         if (!comName) continue;
         if (subId) checklistIds.add(subId);
 
-        // Prefer the taxon code from the CSV (present in all eBird "My Data" exports).
-        // Fall back to PNW_SPECIES lookup for CSVs that omit the code column.
-        let speciesCode: string;
-        let resolvedComName: string;
-        let resolvedSciName: string;
-
+        let speciesCode: string, resolvedComName: string, resolvedSciName: string;
         if (taxonCode) {
-          speciesCode = taxonCode;
-          resolvedComName = comName;
-          resolvedSciName = sciName;
+          speciesCode = taxonCode; resolvedComName = comName; resolvedSciName = sciName;
         } else {
-          const entry =
-            byComName.get(comName.toLowerCase()) ??
-            bySciName.get(sciName.toLowerCase());
+          const entry = byComName.get(comName.toLowerCase()) ?? bySciName.get(sciName.toLowerCase());
           if (!entry) continue;
-          speciesCode = entry.speciesCode;
-          resolvedComName = entry.comName;
-          resolvedSciName = entry.sciName ?? '';
+          speciesCode = entry.speciesCode; resolvedComName = entry.comName; resolvedSciName = entry.sciName ?? '';
         }
 
-        if (!speciesRows.has(speciesCode)) {
-          speciesRows.set(speciesCode, { comName: resolvedComName, sciName: resolvedSciName, rows: [] });
-        }
+        if (!speciesRows.has(speciesCode)) speciesRows.set(speciesCode, { comName: resolvedComName, sciName: resolvedSciName, rows: [] });
         speciesRows.get(speciesCode)!.rows.push({ date, location, subId });
       }
 
-      // Build results
-      const lifeCodes: string[] = [];
-      const yearCodes: string[] = [];
+      const lifeCodes: string[] = [], yearCodes: string[] = [];
       const meta: Record<string, SpeciesMeta> = {};
 
       for (const [code, { comName: spComName, sciName: spSciName, rows }] of speciesRows) {
         lifeCodes.push(code);
-
-        // Find earliest date row
         const sortedRows = [...rows].sort((a, b) => a.date.localeCompare(b.date));
         const firstRow = sortedRows[0];
-
-        meta[code] = {
-          comName: spComName,
-          sciName: spSciName,
-          firstDate: firstRow?.date ?? '',
-          firstLocation: firstRow?.location ?? '',
-          totalCount: rows.length,
-        };
-
-        // Year list: any row with date in current year
-        if (rows.some((r) => r.date.startsWith(currentYear))) {
-          yearCodes.push(code);
-        }
+        meta[code] = { comName: spComName, sciName: spSciName, firstDate: firstRow?.date ?? '', firstLocation: firstRow?.location ?? '', totalCount: rows.length };
+        if (rows.some(r => r.date.startsWith(currentYear))) yearCodes.push(code);
       }
 
       onBulkImport(lifeCodes, yearCodes, meta);
-
-      setImportToast(
-        `Imported ${lifeCodes.length} life species, ${yearCodes.length} year species from ${checklistIds.size} checklists`
-      );
+      setImportToast(`Imported ${lifeCodes.length} life species, ${yearCodes.length} year species from ${checklistIds.size} checklists`);
       setTimeout(() => setImportToast(null), 6000);
     };
     reader.readAsText(file);
-
-    // Reset so same file can be re-imported
     if (fileInputRef.current) fileInputRef.current.value = '';
   }
 
-  // Style tokens
-  const bg = lightMode ? '#f4f6f8' : 'transparent';
-  const cardBg = lightMode ? '#ffffff' : 'transparent';
-  const border = lightMode ? 'rgba(0,0,0,0.07)' : 'rgba(255,255,255,0.07)';
-  const borderThin = lightMode ? 'rgba(0,0,0,0.04)' : 'rgba(255,255,255,0.04)';
-  const inputBg = lightMode ? 'rgba(0,0,0,0.04)' : 'rgba(255,255,255,0.05)';
-  const inputBorder = lightMode ? 'rgba(0,0,0,0.12)' : 'rgba(255,255,255,0.1)';
-  const textPrimary = lightMode ? '#1a2332' : '#ccddef';
-  const textSecondary = lightMode ? '#4a5568' : '#8899aa';
-  const textMuted = lightMode ? '#718096' : '#334455';
-  const dropdownBg = lightMode ? '#ffffff' : '#111820';
-
-  // Sorted life list entries: alphabetically by display name
   const sortedActiveList = [...activeList].sort((a, b) => {
     const nameA = lifeListMeta[a]?.comName ?? nameMap.get(a)?.comName ?? a;
     const nameB = lifeListMeta[b]?.comName ?? nameMap.get(b)?.comName ?? b;
@@ -233,196 +161,136 @@ export default function LifeListPanel({
   });
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', height: '100%', background: bg }}>
+    <div style={{ display: 'flex', flexDirection: 'column', height: '100%', background: t.bg1 }}>
 
-      {/* Life List / Year List toggle */}
-      <div
-        style={{
-          display: 'flex',
-          gap: 6,
-          padding: '10px 12px 8px',
-          borderBottom: `1px solid ${border}`,
-          flexShrink: 0,
-        }}
-      >
-        {(['life', 'year'] as const).map((mode) => {
+      {/* Mode toggle — Life / Year */}
+      <div style={{ display: 'flex', gap: 4, padding: '10px 14px', borderBottom: `1px solid ${t.line2}`, background: t.bg0, flexShrink: 0 }}>
+        {(['life', 'year'] as const).map(mode => {
           const active = mode === 'year' ? yearListActive : !yearListActive;
           return (
-            <button
-              key={mode}
-              onClick={() => onToggleYearList(mode === 'year')}
-              style={{
-                flex: 1,
-                padding: '5px 0',
-                background: active ? 'rgba(245,166,35,0.15)' : inputBg,
-                border: `1px solid ${active ? 'rgba(245,166,35,0.45)' : inputBorder}`,
-                borderRadius: 5,
-                color: active ? '#f5a623' : textSecondary,
-                fontSize: 11,
-                fontWeight: active ? 700 : 400,
-                cursor: 'pointer',
-                letterSpacing: '0.06em',
-                fontFamily: 'var(--font-jb-mono, monospace)',
-                transition: 'all 0.15s',
-              }}
-            >
-              {mode === 'life' ? 'LIFE LIST' : 'YEAR LIST'}
+            <button key={mode} onClick={() => onToggleYearList(mode === 'year')} style={{
+              flex: 1, padding: '8px 4px', borderRadius: 7,
+              background: active ? t.bg1 : 'transparent',
+              border: active ? `1px solid ${t.line2}` : '1px solid transparent',
+              boxShadow: active ? t.shadow : 'none',
+              color: active ? t.fg0 : t.fg3,
+              fontSize: 12, fontWeight: active ? 600 : 400,
+              cursor: 'pointer', fontFamily: t.sans, transition: 'all 0.12s',
+            }}>
+              {mode === 'life' ? 'Life List' : 'Year List'}
             </button>
           );
         })}
       </div>
 
       {/* Stats */}
-      <div
-        style={{
-          display: 'flex',
-          gap: 0,
-          borderBottom: `1px solid ${border}`,
-          flexShrink: 0,
-        }}
-      >
-        <StatCell
-          label={yearListActive ? 'YEAR LIST' : 'LIFE LIST'}
-          value={yearListActive ? `${yearList.length} / ${lifeList.length}` : String(lifeList.length)}
-          color="#f5a623"
-          lightMode={lightMode}
-        />
-        <div style={{ width: 1, background: border }} />
-        <StatCell
-          label="LIFERS NEARBY"
-          value={String(uniqueLiferOps)}
-          color="#3ecfb4"
-          lightMode={lightMode}
-        />
+      <div style={{ display: 'flex', borderBottom: `1px solid ${t.line2}`, flexShrink: 0 }}>
+        <div style={{ flex: 1, padding: '14px 20px', borderRight: `1px solid ${t.line2}` }}>
+          <div style={{ fontSize: 10, fontFamily: t.mono, color: t.fg3, letterSpacing: '0.04em', textTransform: 'uppercase', marginBottom: 3 }}>
+            {yearListActive ? 'Year / Life' : 'Life Total'}
+          </div>
+          <div style={{ fontSize: 26, fontWeight: 700, fontFamily: t.display, color: t.accent, letterSpacing: '-0.03em' }}>
+            {yearListActive ? `${yearList.length} / ${lifeList.length}` : lifeList.length}
+          </div>
+        </div>
+        <div style={{ flex: 1, padding: '14px 20px' }}>
+          <div style={{ fontSize: 10, fontFamily: t.mono, color: t.fg3, letterSpacing: '0.04em', textTransform: 'uppercase', marginBottom: 3 }}>
+            Lifers Nearby
+          </div>
+          <div style={{ fontSize: 26, fontWeight: 700, fontFamily: t.display, color: t.lifer, letterSpacing: '-0.03em' }}>
+            {uniqueLiferOps}
+          </div>
+        </div>
       </div>
 
-      {/* Search + CSV import */}
-      <div
-        style={{
-          padding: '10px 12px',
-          borderBottom: `1px solid ${borderThin}`,
-          flexShrink: 0,
-        }}
-      >
-        <input
-          type="text"
-          placeholder="Search PNW species to add…"
-          value={query}
-          onChange={(e) => handleSearch(e.target.value)}
-          style={{
-            width: '100%',
-            background: inputBg,
-            border: `1px solid ${inputBorder}`,
-            borderRadius: 5,
-            padding: '7px 10px',
-            color: textPrimary,
-            fontSize: 13,
-            outline: 'none',
-            boxSizing: 'border-box',
-            fontFamily: 'var(--font-dm-sans, sans-serif)',
-          }}
-        />
-        {results.length > 0 && (
-          <div
+      {/* Search + import */}
+      <div style={{ padding: '12px 14px', borderBottom: `1px solid ${t.line1}`, flexShrink: 0 }}>
+        {/* Search input */}
+        <div style={{ position: 'relative', marginBottom: 8 }}>
+          <SearchIcon size={14} style={{ position: 'absolute', left: 10, top: '50%', transform: 'translateY(-50%)', color: t.fg3 }}/>
+          <input
+            type="text"
+            placeholder="Search PNW species to add…"
+            value={query}
+            onChange={e => handleSearch(e.target.value)}
             style={{
-              marginTop: 4,
-              background: dropdownBg,
-              border: `1px solid ${inputBorder}`,
-              borderRadius: 5,
-              maxHeight: 200,
-              overflowY: 'auto',
+              width: '100%', padding: '9px 12px 9px 32px',
+              fontSize: 13, fontFamily: t.sans,
+              background: t.bg2, border: `1px solid ${query ? t.accentBorder : t.line2}`,
+              borderRadius: 8, outline: 'none', color: t.fg0,
+              boxSizing: 'border-box', transition: 'border-color 0.15s',
             }}
-          >
-            {results.map((sp) => {
+          />
+          {query && (
+            <button onClick={() => { setQuery(''); setResults([]); }} style={{
+              position: 'absolute', right: 9, top: '50%', transform: 'translateY(-50%)',
+              background: 'transparent', border: 'none', cursor: 'pointer', color: t.fg3, padding: '0 2px',
+            }}>
+              <XIcon size={13}/>
+            </button>
+          )}
+        </div>
+
+        {/* Search dropdown */}
+        {results.length > 0 && (
+          <div style={{
+            marginTop: -4, marginBottom: 8,
+            background: t.cardBg, border: `1px solid ${t.line2}`,
+            borderRadius: 8, maxHeight: 200, overflowY: 'auto',
+            boxShadow: t.shadowLg,
+          }}>
+            {results.map(sp => {
               const already = activeList.includes(sp.speciesCode);
               return (
                 <button
                   key={sp.speciesCode}
-                  onClick={() => {
-                    if (!already) addFn(sp.speciesCode, sp.comName);
-                    setQuery('');
-                    setResults([]);
-                  }}
+                  onClick={() => { if (!already) addFn(sp.speciesCode, sp.comName); setQuery(''); setResults([]); }}
+                  onMouseEnter={() => !already && setHoveredResult(sp.speciesCode)}
+                  onMouseLeave={() => setHoveredResult(null)}
                   disabled={already}
                   style={{
-                    width: '100%',
-                    textAlign: 'left',
-                    background: 'transparent',
+                    width: '100%', textAlign: 'left',
+                    background: hoveredResult === sp.speciesCode ? t.bg2 : 'transparent',
                     border: 'none',
-                    padding: '7px 10px',
-                    cursor: already ? 'default' : 'pointer',
-                    borderBottom: `1px solid ${borderThin}`,
-                    opacity: already ? 0.4 : 1,
-                  }}
-                >
-                  <div style={{ fontSize: 13, color: textPrimary, fontWeight: 500 }}>
-                    {sp.comName}
-                    {already && (
-                      <span style={{ fontSize: 10, color: textMuted, marginLeft: 6 }}>✓ added</span>
-                    )}
+                    padding: '9px 12px', cursor: already ? 'default' : 'pointer',
+                    borderBottom: `1px solid ${t.line1}`, opacity: already ? 0.45 : 1,
+                    fontFamily: t.sans, transition: 'background 0.12s',
+                  }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                    <span style={{ fontSize: 13, color: t.fg0, fontWeight: 500 }}>{sp.comName}</span>
+                    {already && <CheckIcon size={12} style={{ color: t.lifer }}/>}
                   </div>
-                  <div style={{ fontSize: 11, color: textSecondary, fontStyle: 'italic' }}>
-                    {sp.sciName}
-                  </div>
+                  <div style={{ fontSize: 11, color: t.fg2, fontStyle: 'italic' }}>{sp.sciName}</div>
                 </button>
               );
             })}
           </div>
         )}
 
-        {/* eBird CSV import */}
-        <input
-          ref={fileInputRef}
-          type="file"
-          accept=".csv"
-          style={{ display: 'none' }}
-          onChange={handleCSVFile}
-        />
+        {/* Import CSV */}
+        <input ref={fileInputRef} type="file" accept=".csv" style={{ display: 'none' }} onChange={handleCSVFile}/>
         <button
           onClick={() => fileInputRef.current?.click()}
+          onMouseEnter={() => setImportHov(true)}
+          onMouseLeave={() => setImportHov(false)}
           style={{
-            width: '100%',
-            marginTop: 8,
-            padding: '6px 0',
-            background: inputBg,
-            border: `1px solid ${inputBorder}`,
-            borderRadius: 5,
-            color: textSecondary,
-            fontSize: 11,
-            fontWeight: 600,
-            cursor: 'pointer',
-            letterSpacing: '0.04em',
-            fontFamily: 'var(--font-jb-mono, monospace)',
-          }}
-          onMouseEnter={(e) => {
-            (e.currentTarget as HTMLElement).style.borderColor = 'rgba(245,166,35,0.4)';
-            (e.currentTarget as HTMLElement).style.color = '#f5a623';
-          }}
-          onMouseLeave={(e) => {
-            (e.currentTarget as HTMLElement).style.borderColor = inputBorder;
-            (e.currentTarget as HTMLElement).style.color = textSecondary;
-          }}
-        >
-          ↑ Import eBird CSV
+            width: '100%', padding: '8px 0',
+            display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6,
+            background: importHov ? t.bg3 : t.bg2, border: `1px solid ${t.line2}`,
+            borderRadius: 8, color: t.fg1, fontSize: 13, fontWeight: 500,
+            cursor: 'pointer', fontFamily: t.sans, transition: 'all 0.15s',
+          }}>
+          <UploadIcon size={14}/> Import eBird CSV
         </button>
 
         {/* Import toast */}
         {importToast && (
-          <div
-            style={{
-              marginTop: 6,
-              padding: '6px 10px',
-              background: 'rgba(62,207,180,0.12)',
-              border: '1px solid rgba(62,207,180,0.3)',
-              borderRadius: 4,
-              fontSize: 11,
-              color: '#3ecfb4',
-              fontFamily: 'var(--font-jb-mono, monospace)',
-              lineHeight: 1.5,
-            }}
-          >
-            {importToast}
-          </div>
+          <div style={{
+            marginTop: 8, padding: '8px 12px',
+            background: t.liferBg, border: `1px solid ${t.liferBorder}`,
+            borderRadius: 8, fontSize: 12, color: t.lifer,
+            fontFamily: t.mono, lineHeight: 1.5,
+          }}>{importToast}</div>
         )}
 
         {/* Clear list */}
@@ -430,182 +298,92 @@ export default function LifeListPanel({
           <button
             onClick={() => setConfirmClear(true)}
             disabled={activeList.length === 0}
+            onMouseEnter={() => setClearHov(true)}
+            onMouseLeave={() => setClearHov(false)}
             style={{
-              width: '100%',
-              marginTop: 6,
-              padding: '6px 0',
-              background: 'transparent',
-              border: `1px solid ${activeList.length === 0 ? 'transparent' : 'rgba(239,68,68,0.2)'}`,
-              borderRadius: 5,
-              color: activeList.length === 0 ? textMuted : 'rgba(239,68,68,0.6)',
-              fontSize: 11,
-              fontWeight: 600,
-              cursor: activeList.length === 0 ? 'default' : 'pointer',
-              letterSpacing: '0.04em',
-              fontFamily: 'var(--font-jb-mono, monospace)',
-              transition: 'all 0.15s',
-            }}
-            onMouseEnter={(e) => {
-              if (activeList.length > 0) {
-                (e.currentTarget as HTMLElement).style.borderColor = 'rgba(239,68,68,0.5)';
-                (e.currentTarget as HTMLElement).style.color = '#ef4444';
-              }
-            }}
-            onMouseLeave={(e) => {
-              if (activeList.length > 0) {
-                (e.currentTarget as HTMLElement).style.borderColor = 'rgba(239,68,68,0.2)';
-                (e.currentTarget as HTMLElement).style.color = 'rgba(239,68,68,0.6)';
-              }
-            }}
-          >
-            ✕ Clear {yearListActive ? 'Year' : 'Life'} List
+              width: '100%', marginTop: 6, padding: '7px 0',
+              background: clearHov && activeList.length > 0 ? 'rgba(239,68,68,0.06)' : 'transparent',
+              border: `1px solid ${activeList.length === 0 ? 'transparent' : 'rgba(239,68,68,0.22)'}`,
+              borderRadius: 8, color: activeList.length === 0 ? t.fg4 : clearHov ? '#EF4444' : 'rgba(239,68,68,0.65)',
+              fontSize: 12, fontWeight: 500, cursor: activeList.length === 0 ? 'default' : 'pointer',
+              fontFamily: t.sans, transition: 'all 0.15s',
+            }}>
+            Clear {yearListActive ? 'Year' : 'Life'} List
           </button>
         ) : (
-          <div
-            style={{
-              marginTop: 6,
-              padding: '8px 10px',
-              background: 'rgba(239,68,68,0.08)',
-              border: '1px solid rgba(239,68,68,0.3)',
-              borderRadius: 5,
-              display: 'flex',
-              alignItems: 'center',
-              gap: 8,
-            }}
-          >
-            <span style={{ flex: 1, fontSize: 11, color: '#ef4444', fontFamily: 'var(--font-jb-mono, monospace)' }}>
+          <div style={{
+            marginTop: 6, padding: '10px 12px',
+            background: 'rgba(239,68,68,0.06)', border: '1px solid rgba(239,68,68,0.22)',
+            borderRadius: 8, display: 'flex', alignItems: 'center', gap: 8,
+          }}>
+            <span style={{ flex: 1, fontSize: 12, color: '#EF4444', fontFamily: t.sans }}>
               Clear {activeList.length} species?
             </span>
-            <button
-              onClick={() => {
-                if (yearListActive) onClearYearList();
-                else onClearLifeList();
-                setConfirmClear(false);
-              }}
-              style={{
-                padding: '3px 10px',
-                background: 'rgba(239,68,68,0.2)',
-                border: '1px solid rgba(239,68,68,0.4)',
-                borderRadius: 4,
-                color: '#ef4444',
-                fontSize: 11,
-                fontWeight: 700,
-                cursor: 'pointer',
-                fontFamily: 'var(--font-jb-mono, monospace)',
-              }}
-            >
-              Yes
-            </button>
-            <button
-              onClick={() => setConfirmClear(false)}
-              style={{
-                padding: '3px 10px',
-                background: 'transparent',
-                border: `1px solid ${inputBorder}`,
-                borderRadius: 4,
-                color: textSecondary,
-                fontSize: 11,
-                fontWeight: 600,
-                cursor: 'pointer',
-                fontFamily: 'var(--font-jb-mono, monospace)',
-              }}
-            >
-              No
-            </button>
+            <button onClick={() => { if (yearListActive) onClearYearList(); else onClearLifeList(); setConfirmClear(false); }} style={{
+              padding: '4px 12px', background: 'rgba(239,68,68,0.12)',
+              border: '1px solid rgba(239,68,68,0.35)', borderRadius: 6,
+              color: '#EF4444', fontSize: 12, fontWeight: 600, cursor: 'pointer', fontFamily: t.sans,
+            }}>Yes</button>
+            <button onClick={() => setConfirmClear(false)} style={{
+              padding: '4px 12px', background: t.bg2,
+              border: `1px solid ${t.line2}`, borderRadius: 6,
+              color: t.fg2, fontSize: 12, fontWeight: 500, cursor: 'pointer', fontFamily: t.sans,
+            }}>No</button>
           </div>
         )}
       </div>
 
-      {/* List — sorted alphabetically */}
+      {/* List */}
       <div style={{ flex: 1, overflowY: 'auto' }}>
         {activeList.length === 0 ? (
-          <div style={{ padding: 20, textAlign: 'center', color: textMuted, fontSize: 13 }}>
-            <div style={{ fontSize: 28, marginBottom: 8 }}>🐦</div>
+          <div style={{ padding: '32px 20px', textAlign: 'center', color: t.fg3, fontSize: 13, fontFamily: t.sans }}>
+            <div style={{ marginBottom: 10 }}>
+              <svg width="36" height="36" viewBox="0 0 24 24" fill="none" stroke={t.fg4} strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" style={{ display: 'block', margin: '0 auto' }}>
+                <path d="M16 7h.01"/><path d="M3.4 18H12a8 8 0 0 0 8-8V7a4 4 0 0 0-7.28-2.3L2 20"/><path d="m20 7 2 .5-2 .5"/><path d="M10 18v3"/><path d="M14 17.75V21"/><path d="M7 18a6 6 0 0 0 3.84-10.61"/>
+              </svg>
+            </div>
             {yearListActive ? 'Your year list is empty.' : 'Your life list is empty.'}
-            <br />
-            Add species via map markers, search above, or import eBird CSV.
+            <div style={{ fontSize: 12, color: t.fg4, marginTop: 6, lineHeight: 1.5 }}>
+              Add species from map markers, search above, or import eBird CSV.
+            </div>
           </div>
         ) : (
-          sortedActiveList.map((code) => {
+          sortedActiveList.map(code => {
             const meta = lifeListMeta[code];
             const info = nameMap.get(code);
             const name = meta?.comName ?? info?.comName ?? code;
-            const subtitle =
-              meta?.firstDate
-                ? `${formatDate(meta.firstDate)} · ${meta.firstLocation}`
-                : null;
+            const subtitle = meta?.firstDate ? `${formatDate(meta.firstDate)} · ${meta.firstLocation}` : null;
 
             return (
               <div
                 key={code}
+                onMouseEnter={() => setHoveredCode(code)}
+                onMouseLeave={() => setHoveredCode(null)}
                 style={{
-                  display: 'flex',
-                  alignItems: 'flex-start',
-                  padding: '8px 12px',
-                  borderBottom: `1px solid ${borderThin}`,
-                  gap: 8,
-                  background: cardBg,
-                }}
-              >
-                <div
-                  style={{
-                    width: 7,
-                    height: 7,
-                    borderRadius: '50%',
-                    background: yearListActive ? '#3ecfb4' : '#f5a623',
-                    flexShrink: 0,
-                    marginTop: 5,
-                    boxShadow: yearListActive ? '0 0 4px #3ecfb466' : '0 0 4px #f5a62366',
-                  }}
-                />
+                  display: 'flex', alignItems: 'center', gap: 10,
+                  padding: '11px 16px', borderBottom: `1px solid ${t.line1}`,
+                  background: hoveredCode === code ? t.bg2 : t.bg1,
+                  transition: 'background 0.12s',
+                }}>
+                <span style={{ width: 6, height: 6, borderRadius: '50%', background: t.accent, flexShrink: 0, opacity: 0.8 }}/>
                 <div style={{ flex: 1, minWidth: 0 }}>
-                  <div
-                    style={{
-                      fontSize: 13,
-                      color: textPrimary,
-                      overflow: 'hidden',
-                      textOverflow: 'ellipsis',
-                      whiteSpace: 'nowrap',
-                      fontWeight: 500,
-                    }}
-                  >
+                  <div style={{ fontSize: 13, fontWeight: 500, color: t.fg0, fontFamily: t.display, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                     {name}
                   </div>
                   {subtitle && (
-                    <div
-                      style={{
-                        fontSize: 11,
-                        color: textMuted,
-                        marginTop: 1,
-                        overflow: 'hidden',
-                        textOverflow: 'ellipsis',
-                        whiteSpace: 'nowrap',
-                        fontFamily: 'var(--font-jb-mono, monospace)',
-                      }}
-                    >
+                    <div style={{ fontSize: 10.5, color: t.fg3, marginTop: 1, fontFamily: t.mono, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                       {subtitle}
                     </div>
                   )}
                 </div>
-                <button
-                  onClick={() => removeFn(code)}
-                  title={`Remove from ${yearListActive ? 'year' : 'life'} list`}
-                  style={{
-                    background: 'transparent',
-                    border: 'none',
-                    color: textMuted,
-                    cursor: 'pointer',
-                    fontSize: 14,
-                    padding: '2px 4px',
-                    borderRadius: 3,
-                    lineHeight: 1,
-                    flexShrink: 0,
-                    marginTop: 1,
-                  }}
-                  onMouseEnter={(e) => { (e.currentTarget as HTMLElement).style.color = '#ef4444'; }}
-                  onMouseLeave={(e) => { (e.currentTarget as HTMLElement).style.color = textMuted; }}
-                >
-                  ×
+                {meta?.totalCount && meta.totalCount > 1 && (
+                  <span style={{ fontSize: 10.5, fontFamily: t.mono, color: t.fg3, flexShrink: 0 }}>×{meta.totalCount}</span>
+                )}
+                <button onClick={() => removeFn(code)} title={`Remove from ${yearListActive ? 'year' : 'life'} list`} style={{
+                  background: 'transparent', border: 'none', cursor: 'pointer',
+                  color: t.fg4, padding: '2px', borderRadius: 4, lineHeight: 1, flexShrink: 0,
+                }}>
+                  <XIcon size={13}/>
                 </button>
               </div>
             );
@@ -616,70 +394,20 @@ export default function LifeListPanel({
   );
 }
 
-// ─── CSV row parser (handles quoted fields) ───────────────────────────────────
+// ─── CSV row parser ──────────────────────────────────────────────────────────
 
 function parseCSVRow(line: string): string[] {
   const result: string[] = [];
-  let current = '';
-  let inQuotes = false;
+  let current = '', inQuotes = false;
   for (let i = 0; i < line.length; i++) {
     const ch = line[i];
     if (ch === '"') {
-      if (inQuotes && line[i + 1] === '"') {
-        current += '"';
-        i++;
-      } else {
-        inQuotes = !inQuotes;
-      }
+      if (inQuotes && line[i + 1] === '"') { current += '"'; i++; }
+      else inQuotes = !inQuotes;
     } else if (ch === ',' && !inQuotes) {
-      result.push(current);
-      current = '';
-    } else {
-      current += ch;
-    }
+      result.push(current); current = '';
+    } else current += ch;
   }
   result.push(current);
   return result;
-}
-
-// ─── StatCell ────────────────────────────────────────────────────────────────
-
-function StatCell({
-  label,
-  value,
-  color,
-  lightMode,
-}: {
-  label: string;
-  value: string;
-  color: string;
-  lightMode: boolean;
-}) {
-  const labelColor = lightMode ? '#718096' : '#445566';
-
-  return (
-    <div
-      style={{
-        flex: 1,
-        padding: '12px 14px',
-        display: 'flex',
-        flexDirection: 'column',
-        gap: 3,
-      }}
-    >
-      <span
-        style={{
-          fontSize: 10,
-          letterSpacing: '0.1em',
-          color: labelColor,
-          fontFamily: 'var(--font-jb-mono, monospace)',
-        }}
-      >
-        {label}
-      </span>
-      <span style={{ fontSize: 22, fontWeight: 700, color, fontFamily: 'var(--font-jb-mono, monospace)' }}>
-        {value}
-      </span>
-    </div>
-  );
 }

@@ -8,7 +8,7 @@ import StatusBar from '@/components/StatusBar';
 import NotificationToast, { type ToastItem } from '@/components/NotificationToast';
 
 import { useMobile } from '@/hooks/useMobile';
-import { mergeObservations, DEFAULT_SETTINGS } from '@/lib/ebird';
+import { mergeObservations, DEFAULT_SETTINGS, fmtDist } from '@/lib/ebird';
 import type { Observation, Hotspot, ClassifiedObservation, AppSettings, TargetSpecies } from '@/lib/ebird';
 import { classifyAll } from '@/lib/classify';
 import { sendBrowserNotification, playAlertBeep } from '@/lib/notifications';
@@ -89,17 +89,17 @@ const BirdMap = dynamic(() => import('@/components/Map'), {
     <div
       style={{
         height: '100%',
-        background: '#0a0e14',
+        background: '#F1F3F5',
         display: 'flex',
         alignItems: 'center',
         justifyContent: 'center',
-        color: '#334455',
-        fontFamily: 'var(--font-jb-mono, monospace)',
-        fontSize: 13,
-        letterSpacing: '0.1em',
+        color: '#9CA3AF',
+        fontFamily: "var(--font-jb-mono, 'IBM Plex Mono', monospace)",
+        fontSize: 12,
+        letterSpacing: '0.06em',
       }}
     >
-      INITIALIZING MAP…
+      Loading map…
     </div>
   ),
 });
@@ -326,7 +326,7 @@ export default function Home() {
         setToasts((prev) => [...prev.slice(-2), { id, speciesName: obs.comName, locName: obs.locName, distKm }]);
         sendBrowserNotification(
           `🐦 ${alertLabel} nearby: ${obs.comName}`,
-          `${obs.locName} · ${distKm.toFixed(1)} km away`
+          `${obs.locName} · ${fmtDist(distKm, settingsRef.current.useMetric)} away`
         );
         if (settingsRef.current.soundEnabled) {
           try { playAlertBeep(); } catch { /* ignore */ }
@@ -537,7 +537,7 @@ export default function Home() {
         height: '100vh',
         width: '100vw',
         overflow: 'hidden',
-        background: lm ? '#e8ecf0' : '#0a0e14',
+        background: lm ? '#F8F9FA' : '#09090B',
       }}
     >
       <Sidebar
@@ -593,10 +593,12 @@ export default function Home() {
           pinLocation={pinLocation}
           userLocation={userLocation}
           focusedSpecies={focusedSpecies}
+          loading={loading}
           onAddToLifeList={handleAddToLifeList}
           onHotspotDetail={setHotspotPanel}
           onPinDrop={handlePinDrop}
           onClearPin={handleClearPin}
+          onRefreshNow={() => fetchData(true)}
         />
       </div>
 
@@ -604,6 +606,7 @@ export default function Home() {
         toasts={toasts}
         onDismiss={handleDismissToast}
         lightMode={lm}
+        useMetric={settings.useMetric}
       />
     </div>
   );
