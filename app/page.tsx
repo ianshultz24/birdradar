@@ -376,6 +376,11 @@ export default function Home() {
     }
   }, [center, settings.searchRadius, fetchData]);
 
+  // Sync dark/light class on <html> for global CSS selectors (.dark scrollbar, etc.)
+  useEffect(() => {
+    document.documentElement.classList.toggle('dark', !settings.lightMode);
+  }, [settings.lightMode]);
+
   // Auto-refresh
   useEffect(() => {
     if (settings.autoRefresh === 0) return;

@@ -565,7 +565,7 @@ export default function BirdMap({
   };
 
   return (
-    <div style={{ position: 'relative', height: '100%', width: '100%' }}>
+    <div className={lightMode ? '' : 'dark'} style={{ position: 'relative', height: '100%', width: '100%' }}>
       <MapContainer
         center={center}
         zoom={11}

@@ -61,7 +61,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
   showHotspots: true,
   dimSeenSpecies: true,
   liferPulse: true,
-  lightMode: false,
+  lightMode: true,
   yearListActive: false,
   searchRadius: 25,
   useMetric: true,

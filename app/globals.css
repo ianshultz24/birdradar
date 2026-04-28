@@ -91,11 +91,22 @@ body {
   color: #FAFAFA;
 }
 
+.dark .bird-popup .leaflet-popup-close-button {
+  color: #52525B;
+}
+
+.dark .bird-popup .leaflet-popup-close-button:hover {
+  color: #A1A1AA;
+}
+
 /* ─── Custom scrollbar — minimal ─── */
 ::-webkit-scrollbar { width: 3px; height: 3px; }
 ::-webkit-scrollbar-track { background: transparent; }
 ::-webkit-scrollbar-thumb { background: rgba(0, 0, 0, 0.12); border-radius: 2px; }
 ::-webkit-scrollbar-thumb:hover { background: rgba(0, 0, 0, 0.20); }
+
+.dark ::-webkit-scrollbar-thumb { background: rgba(255, 255, 255, 0.10); }
+.dark ::-webkit-scrollbar-thumb:hover { background: rgba(255, 255, 255, 0.18); }
 
 /* ─── Leaflet map ─── */
 .leaflet-container { background: #F1F3F5 !important; }
@@ -111,6 +122,17 @@ body {
 
 .leaflet-control-zoom a:hover {
   background: #F1F3F5 !important;
+}
+
+/* Dark mode zoom controls */
+.dark .leaflet-control-zoom a {
+  color: #D4D4D8 !important;
+  background: #18181B !important;
+  border-color: #3F3F46 !important;
+}
+
+.dark .leaflet-control-zoom a:hover {
+  background: #27272A !important;
 }
 
 /* ─── Input focus ring ─── */
