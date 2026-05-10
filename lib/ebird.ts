@@ -64,7 +64,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
   lightMode: true,
   yearListActive: false,
   searchRadius: 25,
-  useMetric: true,
+  useMetric: false,
   autoRefresh: 0,
   notificationsEnabled: false,
   soundEnabled: false,

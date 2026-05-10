@@ -569,6 +569,8 @@ export default function BirdMap({
       <MapContainer
         center={center}
         zoom={11}
+        minZoom={3}
+        maxZoom={18}
         style={{ height: '100%', width: '100%', background: lightMode ? '#e8ecf0' : '#0a0e14' }}
         zoomControl={false}
       >
