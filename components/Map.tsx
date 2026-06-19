@@ -187,6 +187,22 @@ function RecenterController({ target, trigger }: { target: [number, number]; tri
   return null;
 }
 
+// ─── InitialLocationController ────────────────────────────────────────────────
+
+const INITIAL_LOCATION_ZOOM = 11;
+
+function InitialLocationController({ location }: { location: [number, number] | null }) {
+  const map = useMap();
+  const done = useRef(false);
+  useEffect(() => {
+    if (location && !done.current) {
+      done.current = true;
+      map.setView(location, INITIAL_LOCATION_ZOOM);
+    }
+  }, [location, map]);
+  return null;
+}
+
 // ─── MapClickHandler ──────────────────────────────────────────────────────────
 
 function MapClickHandler({ active, onMapClick }: { active: boolean; onMapClick: (lat: number, lng: number) => void }) {
@@ -428,12 +444,10 @@ function MultiObsPopup({
 
 function HotspotPopupContent({
   hs,
-  color,
   onMoreInfo,
   lightMode,
 }: {
   hs: Hotspot;
-  color: string;
   onMoreInfo: (hs: Hotspot) => void;
   lightMode: boolean;
 }) {
@@ -578,6 +592,7 @@ export default function BirdMap({
 
         <MapController target={flyToTarget} />
         <RecenterController target={reCenterTarget} trigger={reCenterTrigger} />
+        <InitialLocationController location={userLocation} />
         <MapClickHandler active={isPinMode} onMapClick={handleMapClick} />
         <CursorController isPinMode={isPinMode} />
 
@@ -607,13 +622,11 @@ export default function BirdMap({
         {settings.showHotspots &&
           hotspots.map(hs => {
             const ratio = Math.min(getHotspotHeat(hs) / maxHeat, 1);
-            const color = hotspotHeatColor(ratio);
             return (
               <Marker key={hs.locId} position={[hs.lat, hs.lng]} icon={hotspotIcon(ratio)}>
                 <Popup className="bird-popup">
                   <HotspotPopupContent
                     hs={hs}
-                    color={color}
                     onMoreInfo={onHotspotDetail}
                     lightMode={lightMode}
                   />

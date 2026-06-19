@@ -40,7 +40,6 @@ interface Props {
   onClearYearList: () => void;
   onSettingsChange: (s: AppSettings) => void;
   onRefreshNow: () => void;
-  onHotspotDetail: (hs: Hotspot) => void;
   onCloseHotspotPanel: () => void;
 }
 
@@ -58,7 +57,7 @@ export default function Sidebar(props: Props) {
     focusedSpecies, onFlyTo, onFocusSpecies,
     onAddToLifeList, onRemoveFromLifeList, onAddToYearList, onRemoveFromYearList,
     onBulkImport, onClearLifeList, onClearYearList, onSettingsChange,
-    onRefreshNow, onHotspotDetail, onCloseHotspotPanel,
+    onRefreshNow, onCloseHotspotPanel,
   } = props;
 
   const [hoveredTab, setHoveredTab] = useState<Tab | null>(null);

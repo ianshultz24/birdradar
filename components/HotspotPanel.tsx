@@ -18,15 +18,25 @@ export default function HotspotPanel({ hotspot, lifeList, onClose, onAddToLifeLi
   const [obs, setObs] = useState<Observation[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(false);
+  const [shownLocId, setShownLocId] = useState(hotspot.locId);
   const [hoveredCode, setHoveredCode] = useState<string | null>(null);
   const [hoveredAddCode, setHoveredAddCode] = useState<string | null>(null);
   const [backHov, setBackHov] = useState(false);
   const t = getTheme(lightMode);
   const lifeSet = new Set(lifeList);
 
+  // Reset display state synchronously during render when the hotspot changes
+  // (React-blessed "adjust state on prop change" pattern — avoids set-state-in-effect).
+  if (shownLocId !== hotspot.locId) {
+    setShownLocId(hotspot.locId);
+    setObs([]);
+    setLoading(true);
+    setError(false);
+  }
+
   useEffect(() => {
-    setLoading(true); setError(false); setObs([]);
-    fetch(`/api/ebird/hotspot-obs?locId=${encodeURIComponent(hotspot.locId)}`)
+    const controller = new AbortController();
+    fetch(`/api/ebird/hotspot-obs?locId=${encodeURIComponent(hotspot.locId)}`, { signal: controller.signal })
       .then(r => { if (!r.ok) throw new Error(); return r.json(); })
       .then((data: Observation[]) => {
         if (!Array.isArray(data)) throw new Error();
@@ -37,8 +47,9 @@ export default function HotspotPanel({ hotspot, lifeList, onClose, onAddToLifeLi
         }
         setObs(Array.from(seen.values()).sort((a, b) => new Date(b.obsDt).getTime() - new Date(a.obsDt).getTime()));
       })
-      .catch(() => setError(true))
-      .finally(() => setLoading(false));
+      .catch((e: unknown) => { if ((e as { name?: string }).name !== 'AbortError') setError(true); })
+      .finally(() => { if (!controller.signal.aborted) setLoading(false); });
+    return () => controller.abort();
   }, [hotspot.locId]);
 
   return (

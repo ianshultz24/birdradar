@@ -6,6 +6,8 @@ import dynamic from 'next/dynamic';
 import Sidebar from '@/components/Sidebar';
 import StatusBar from '@/components/StatusBar';
 import NotificationToast, { type ToastItem } from '@/components/NotificationToast';
+import { XIcon } from '@/components/Icons';
+import { getTheme } from '@/lib/theme';
 
 import { useMobile } from '@/hooks/useMobile';
 import { mergeObservations, DEFAULT_SETTINGS, fmtDist } from '@/lib/ebird';
@@ -123,6 +125,7 @@ export default function Home() {
   const [lastFetch, setLastFetch] = useState(0);
   const [focusedSpecies, setFocusedSpecies] = useState<{ code: string; name: string } | null>(null);
   const [toasts, setToasts] = useState<ToastItem[]>([]);
+  const [locationNotice, setLocationNotice] = useState(false);
   const isMobile = useMobile();
   const [drawerOpen, setDrawerOpen] = useState(false);
 
@@ -166,7 +169,8 @@ export default function Home() {
           setUserLocation(coords);
         },
         () => {
-          // Permission denied or unavailable — keep default
+          // Permission denied or unavailable — keep default, show notice
+          setLocationNotice(true);
         },
         { enableHighAccuracy: true, timeout: 10000, maximumAge: 0 }
       );
@@ -573,7 +577,6 @@ export default function Home() {
         onClearYearList={handleClearYearList}
         onSettingsChange={handleSettingsChange}
         onRefreshNow={() => fetchData(true)}
-        onHotspotDetail={setHotspotPanel}
         onCloseHotspotPanel={() => setHotspotPanel(null)}
       />
 
@@ -613,6 +616,33 @@ export default function Home() {
         lightMode={lm}
         useMetric={settings.useMetric}
       />
+
+      {locationNotice && (() => {
+        const t = getTheme(lm);
+        return (
+          <div style={{
+            position: 'fixed', bottom: 24, left: '50%', transform: 'translateX(-50%)',
+            zIndex: 9999, display: 'flex', alignItems: 'center', gap: 10,
+            background: t.cardBg, border: `1px solid ${t.line2}`,
+            borderRadius: 10, padding: '10px 14px',
+            boxShadow: t.shadowLg, pointerEvents: 'all',
+            fontFamily: t.mono, fontSize: 12, color: t.fg2,
+            whiteSpace: 'nowrap',
+          }}>
+            <span>Location unavailable — showing a default region.</span>
+            <button
+              onClick={() => setLocationNotice(false)}
+              style={{
+                background: 'transparent', border: 'none', cursor: 'pointer',
+                color: t.fg3, padding: '2px', display: 'flex', alignItems: 'center',
+              }}
+              aria-label="Dismiss"
+            >
+              <XIcon size={14} />
+            </button>
+          </div>
+        );
+      })()}
     </div>
   );
 }
