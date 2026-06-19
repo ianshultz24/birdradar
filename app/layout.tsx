@@ -1,7 +1,10 @@
 import type { Metadata, Viewport } from 'next';
 import { Space_Grotesk, Plus_Jakarta_Sans, IBM_Plex_Mono } from 'next/font/google';
+import { Suspense } from 'react';
 import './globals.css';
 import 'leaflet/dist/leaflet.css';
+import { PostHogProvider } from './providers';
+import { PostHogPageView } from './PostHogPageView';
 
 // Display font — Space Grotesk (variable font: wght 300-700)
 const spaceGrotesk = Space_Grotesk({
@@ -46,7 +49,14 @@ export default function RootLayout({
       lang="en"
       className={`${spaceGrotesk.variable} ${plusJakartaSans.variable} ${ibmPlexMono.variable} h-full`}
     >
-      <body className="h-full overflow-hidden">{children}</body>
+      <body className="h-full overflow-hidden">
+          <PostHogProvider>
+            <Suspense fallback={null}>
+              <PostHogPageView />
+            </Suspense>
+            {children}
+          </PostHogProvider>
+        </body>
     </html>
   );
 }
