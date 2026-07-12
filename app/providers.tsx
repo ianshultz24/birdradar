@@ -6,7 +6,9 @@ import { useEffect } from 'react';
 
 export function PostHogProvider({ children }: { children: React.ReactNode }) {
   useEffect(() => {
-    posthog.init(process.env.NEXT_PUBLIC_POSTHOG_KEY!, {
+    const key = process.env.NEXT_PUBLIC_POSTHOG_KEY;
+    if (!key) return; // analytics disabled in local/preview builds without the key
+    posthog.init(key, {
       api_host: process.env.NEXT_PUBLIC_POSTHOG_HOST,
       person_profiles: 'identified_only',
       capture_pageview: false,

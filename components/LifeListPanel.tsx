@@ -6,7 +6,9 @@ import { searchSpecies, type SpeciesEntry } from '@/lib/species-data';
 import { PNW_SPECIES } from '@/lib/species-data';
 import type { SpeciesMeta } from '@/lib/lifelist';
 import { getTheme } from '@/lib/theme';
-import { SearchIcon, UploadIcon, XIcon, CheckIcon } from '@/components/Icons';
+import { SearchIcon, UploadIcon, DownloadIcon, XIcon, CheckIcon } from '@/components/Icons';
+
+const MAX_IMPORT_FILE_BYTES = 5 * 1024 * 1024; // 5 MB — larger files freeze the tab in the synchronous parse
 
 interface Props {
   lifeList: string[];
@@ -14,9 +16,9 @@ interface Props {
   lifeListMeta: Record<string, SpeciesMeta>;
   yearListActive: boolean;
   observations: ClassifiedObservation[];
-  onAdd: (speciesCode: string, comName: string) => void;
+  onAdd: (speciesCode: string, comName: string, sciName?: string) => void;
   onRemove: (speciesCode: string) => void;
-  onAddToYear: (speciesCode: string, comName: string) => void;
+  onAddToYear: (speciesCode: string, comName: string, sciName?: string) => void;
   onRemoveFromYear: (speciesCode: string) => void;
   onToggleYearList: (active: boolean) => void;
   onBulkImport: (lifeCodes: string[], yearCodes: string[], meta: Record<string, SpeciesMeta>) => void;
@@ -54,6 +56,7 @@ export default function LifeListPanel({
   const [hoveredCode, setHoveredCode] = useState<string | null>(null);
   const [hoveredResult, setHoveredResult] = useState<string | null>(null);
   const [importHov, setImportHov] = useState(false);
+  const [exportHov, setExportHov] = useState(false);
   const [clearHov, setClearHov] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const t = getTheme(lightMode);
@@ -71,14 +74,70 @@ export default function LifeListPanel({
     setResults(q.trim() ? searchSpecies(q) : []);
   }
 
-  // ─── CSV Import ─────────────────────────────────────────────────────────────
+  function showToast(msg: string, ms = 5000) {
+    setImportToast(msg);
+    setTimeout(() => setImportToast(null), ms);
+  }
+
+  // ─── Export (data-loss insurance for localStorage-only lists) ───────────────
+  function handleExport() {
+    const payload = {
+      version: 1,
+      exportedAt: new Date().toISOString(),
+      lifeList,
+      yearList,
+      lifeListMeta,
+    };
+    const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `birdradar-lists-${new Date().toISOString().slice(0, 10)}.json`;
+    a.click();
+    URL.revokeObjectURL(url);
+  }
+
+  // ─── JSON Import (round-trips the export format) ────────────────────────────
+  function handleJSONImport(text: string) {
+    try {
+      const data: unknown = JSON.parse(text);
+      const d = data as { lifeList?: unknown; yearList?: unknown; lifeListMeta?: unknown };
+      const lifeCodes = Array.isArray(d.lifeList) ? d.lifeList.filter((c): c is string => typeof c === 'string') : [];
+      const yearCodes = Array.isArray(d.yearList) ? d.yearList.filter((c): c is string => typeof c === 'string') : [];
+      const meta = (d.lifeListMeta && typeof d.lifeListMeta === 'object' && !Array.isArray(d.lifeListMeta))
+        ? d.lifeListMeta as Record<string, SpeciesMeta>
+        : {};
+      if (lifeCodes.length === 0 && yearCodes.length === 0) {
+        showToast('No species found in JSON file.');
+        return;
+      }
+      onBulkImport(lifeCodes, yearCodes, meta);
+      showToast(`Imported ${lifeCodes.length} life species, ${yearCodes.length} year species from backup`, 6000);
+    } catch {
+      showToast('Could not read JSON file.');
+    }
+  }
+
+  // ─── CSV / JSON Import ──────────────────────────────────────────────────────
   function handleCSVFile(e: React.ChangeEvent<HTMLInputElement>) {
     const file = e.target.files?.[0];
     if (!file) return;
 
+    if (file.size > MAX_IMPORT_FILE_BYTES) {
+      showToast('File too large — imports are limited to 5 MB.');
+      if (fileInputRef.current) fileInputRef.current.value = '';
+      return;
+    }
+
+    const isJSON = file.name.toLowerCase().endsWith('.json');
+
     const reader = new FileReader();
     reader.onload = (ev) => {
       const text = ev.target?.result as string;
+      if (isJSON) {
+        handleJSONImport(text);
+        return;
+      }
       const lines = text.split(/\r?\n/).filter(Boolean);
       if (lines.length < 2) return;
 
@@ -91,8 +150,7 @@ export default function LifeListPanel({
       const subIdIdx = header.findIndex(h => h.trim().toLowerCase() === 'submission id');
 
       if (comNameIdx === -1) {
-        setImportToast('Could not find "Common Name" column in CSV.');
-        setTimeout(() => setImportToast(null), 5000);
+        showToast('Could not find "Common Name" column in CSV.');
         return;
       }
 
@@ -147,8 +205,7 @@ export default function LifeListPanel({
       }
 
       onBulkImport(lifeCodes, yearCodes, meta);
-      setImportToast(`Imported ${lifeCodes.length} life species, ${yearCodes.length} year species from ${checklistIds.size} checklists`);
-      setTimeout(() => setImportToast(null), 6000);
+      showToast(`Imported ${lifeCodes.length} life species, ${yearCodes.length} year species from ${checklistIds.size} checklists`, 6000);
     };
     reader.readAsText(file);
     if (fileInputRef.current) fileInputRef.current.value = '';
@@ -244,7 +301,7 @@ export default function LifeListPanel({
               return (
                 <button
                   key={sp.speciesCode}
-                  onClick={() => { if (!already) addFn(sp.speciesCode, sp.comName); setQuery(''); setResults([]); }}
+                  onClick={() => { if (!already) addFn(sp.speciesCode, sp.comName, sp.sciName); setQuery(''); setResults([]); }}
                   onMouseEnter={() => !already && setHoveredResult(sp.speciesCode)}
                   onMouseLeave={() => setHoveredResult(null)}
                   disabled={already}
@@ -267,21 +324,40 @@ export default function LifeListPanel({
           </div>
         )}
 
-        {/* Import CSV */}
-        <input ref={fileInputRef} type="file" accept=".csv" style={{ display: 'none' }} onChange={handleCSVFile}/>
-        <button
-          onClick={() => fileInputRef.current?.click()}
-          onMouseEnter={() => setImportHov(true)}
-          onMouseLeave={() => setImportHov(false)}
-          style={{
-            width: '100%', padding: '8px 0',
-            display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6,
-            background: importHov ? t.bg3 : t.bg2, border: `1px solid ${t.line2}`,
-            borderRadius: 8, color: t.fg1, fontSize: 13, fontWeight: 500,
-            cursor: 'pointer', fontFamily: t.sans, transition: 'all 0.15s',
-          }}>
-          <UploadIcon size={14}/> Import eBird CSV
-        </button>
+        {/* Import CSV/JSON + Export */}
+        <input ref={fileInputRef} type="file" accept=".csv,.json" style={{ display: 'none' }} onChange={handleCSVFile}/>
+        <div style={{ display: 'flex', gap: 6 }}>
+          <button
+            onClick={() => fileInputRef.current?.click()}
+            onMouseEnter={() => setImportHov(true)}
+            onMouseLeave={() => setImportHov(false)}
+            style={{
+              flex: 1, padding: '8px 0',
+              display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6,
+              background: importHov ? t.bg3 : t.bg2, border: `1px solid ${t.line2}`,
+              borderRadius: 8, color: t.fg1, fontSize: 13, fontWeight: 500,
+              cursor: 'pointer', fontFamily: t.sans, transition: 'all 0.15s',
+            }}>
+            <UploadIcon size={14}/> Import
+          </button>
+          <button
+            onClick={handleExport}
+            disabled={lifeList.length === 0 && yearList.length === 0}
+            onMouseEnter={() => setExportHov(true)}
+            onMouseLeave={() => setExportHov(false)}
+            title="Download your lists as a JSON backup"
+            style={{
+              flex: 1, padding: '8px 0',
+              display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6,
+              background: exportHov ? t.bg3 : t.bg2, border: `1px solid ${t.line2}`,
+              borderRadius: 8, fontSize: 13, fontWeight: 500,
+              color: lifeList.length === 0 && yearList.length === 0 ? t.fg4 : t.fg1,
+              cursor: lifeList.length === 0 && yearList.length === 0 ? 'default' : 'pointer',
+              fontFamily: t.sans, transition: 'all 0.15s',
+            }}>
+            <DownloadIcon size={14}/> Export
+          </button>
+        </div>
 
         {/* Import toast */}
         {importToast && (

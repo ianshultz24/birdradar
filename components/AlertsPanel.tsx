@@ -2,7 +2,7 @@
 
 import { useState } from 'react';
 import type { ClassifiedObservation, TargetSpecies } from '@/lib/ebird';
-import { timeAgo, fmtDist } from '@/lib/ebird';
+import { timeAgo, fmtDist, parseObsDt } from '@/lib/ebird';
 import { getTheme, tierTokens, tierLabel, type Theme } from '@/lib/theme';
 import { SearchIcon, XIcon, MapPinIcon, TargetIcon } from '@/components/Icons';
 
@@ -39,13 +39,13 @@ export default function AlertsPanel({
 
   function sortObs(arr: ClassifiedObservation[]): ClassifiedObservation[] {
     if (sortBy === 'closest') {
-      return [...arr].sort((a, b) => {
-        const da = haversineKm(userCenter[0], userCenter[1], a.lat, a.lng);
-        const db = haversineKm(userCenter[0], userCenter[1], b.lat, b.lng);
-        return da - db;
-      });
+      // Precompute distances once instead of inside the comparator (O(n) vs O(n log n) haversines)
+      return arr
+        .map((obs) => ({ obs, d: haversineKm(userCenter[0], userCenter[1], obs.lat, obs.lng) }))
+        .sort((a, b) => a.d - b.d)
+        .map(({ obs }) => obs);
     }
-    return [...arr].sort((a, b) => new Date(b.obsDt).getTime() - new Date(a.obsDt).getTime());
+    return [...arr].sort((a, b) => parseObsDt(b.obsDt).getTime() - parseObsDt(a.obsDt).getTime());
   }
 
   const liferAll = sortObs(observations.filter(o => o.tier === 'lifer-rare' || o.tier === 'lifer'));
@@ -56,7 +56,7 @@ export default function AlertsPanel({
     const matches = observations.filter(o => o.speciesCode === speciesCode);
     if (!matches.length) return;
     const best = matches.reduce((a, b) =>
-      new Date(a.obsDt).getTime() >= new Date(b.obsDt).getTime() ? a : b
+      parseObsDt(a.obsDt).getTime() >= parseObsDt(b.obsDt).getTime() ? a : b
     );
     onFlyTo(best.lat, best.lng);
   }
@@ -70,7 +70,7 @@ export default function AlertsPanel({
           const q = searchQuery.trim().toLowerCase();
           return o.comName.toLowerCase().includes(q) || o.sciName.toLowerCase().includes(q);
         })
-        .sort((a, b) => new Date(b.obsDt).getTime() - new Date(a.obsDt).getTime())
+        .sort((a, b) => parseObsDt(b.obsDt).getTime() - parseObsDt(a.obsDt).getTime())
     : [];
 
   return (

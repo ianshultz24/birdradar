@@ -34,6 +34,8 @@ import {
 
 const DEFAULT_CENTER: [number, number] = [47.65, -122.17];
 const RATE_LIMIT_MS = 5 * 60 * 1000;
+/** Minimum gap between forced refreshes of the same location+radius (spam-click guard) */
+const MIN_FORCE_INTERVAL_MS = 15 * 1000;
 const LIFER_ALERT_RADIUS_KM = 16.09; // 10 miles
 
 /**
@@ -145,6 +147,14 @@ export default function Home() {
   const fetchGenerationRef = useRef(0);
   /** True after the first successful fetch has triggered a life list code reconciliation */
   const hasReconciledRef = useRef(false);
+  /** Params key of the fetch currently in flight (null when idle) */
+  const inFlightKeyRef = useRef<string | null>(null);
+  /** Params key of the last successfully completed fetch */
+  const lastFetchKeyRef = useRef('');
+  /** Abort controller for the in-flight fetch — superseded fetches are cancelled, not just ignored */
+  const abortRef = useRef<AbortController | null>(null);
+  /** Regional species lists change ~never — cache per region for the session */
+  const sppListCacheRef = useRef<Map<string, string[]>>(new Map());
 
   // Keep refs in sync
   settingsRef.current = settings;
@@ -172,31 +182,52 @@ export default function Home() {
           // Permission denied or unavailable — keep default, show notice
           setLocationNotice(true);
         },
-        { enableHighAccuracy: true, timeout: 10000, maximumAge: 0 }
+        // A minute-old cached position is fine for a 25-50 km search radius
+        // and avoids a slow cold GPS fix on startup
+        { enableHighAccuracy: true, timeout: 10000, maximumAge: 60000 }
       );
     }
   }, []);
 
   const fetchData = useCallback(async (force = false) => {
     const now = Date.now();
-    if (!force && now - lastFetchRef.current < RATE_LIMIT_MS && lastFetchRef.current > 0) return;
 
-    // Tag this fetch; if a newer one starts before this completes, discard stale results
-    const gen = ++fetchGenerationRef.current;
-
-    // Use pin location when active, otherwise user's GPS/default location
-    const [lat, lng] = pinLocationRef.current ?? centerRef.current;
+    // Use pin location when active, otherwise user's GPS/default location.
+    // Coordinates are rounded to 2 decimals (~1.1 km) so nearby users produce
+    // identical request URLs and share the CDN cache entry.
+    const [rawLat, rawLng] = pinLocationRef.current ?? centerRef.current;
+    const lat = rawLat.toFixed(2);
+    const lng = rawLng.toFixed(2);
     // Settings radius is in km; pin always uses 50 km (eBird API max)
     const distKm = pinLocationRef.current ? 50 : Math.min(settingsRef.current.searchRadius, 50);
+    const paramsKey = `${lat},${lng},${distKm}`;
+
+    // An identical fetch is already running — let it finish
+    if (inFlightKeyRef.current === paramsKey) return;
+
+    // Throttle repeat fetches of the same params: forced refreshes get a short
+    // spam-click guard, non-forced ones obey the long auto window.
+    if (lastFetchRef.current > 0 && paramsKey === lastFetchKeyRef.current) {
+      const elapsed = now - lastFetchRef.current;
+      if (elapsed < (force ? MIN_FORCE_INTERVAL_MS : RATE_LIMIT_MS)) return;
+    }
+
+    // Tag this fetch; if a newer one starts before this completes, discard stale results.
+    // Also abort any in-flight fetch for different params — don't just ignore it.
+    const gen = ++fetchGenerationRef.current;
+    abortRef.current?.abort();
+    const controller = new AbortController();
+    abortRef.current = controller;
+    inFlightKeyRef.current = paramsKey;
 
     setLoading(true);
     setApiStatus('loading');
 
     try {
       const [recentRes, notableRes, hotspotsRes] = await Promise.all([
-        fetch(`/api/ebird/recent?lat=${lat}&lng=${lng}&dist=${distKm}`),
-        fetch(`/api/ebird/notable?lat=${lat}&lng=${lng}&dist=${distKm}`),
-        fetch(`/api/ebird/hotspots?lat=${lat}&lng=${lng}&dist=${distKm}`),
+        fetch(`/api/ebird/recent?lat=${lat}&lng=${lng}&dist=${distKm}`, { signal: controller.signal }),
+        fetch(`/api/ebird/notable?lat=${lat}&lng=${lng}&dist=${distKm}`, { signal: controller.signal }),
+        fetch(`/api/ebird/hotspots?lat=${lat}&lng=${lng}&dist=${distKm}`, { signal: controller.signal }),
       ]);
 
       // A newer fetchData started while this was in-flight — discard silently
@@ -256,14 +287,30 @@ export default function Home() {
       }
 
       // ─── Target Species ────────────────────────────────────────────────────
+      // Region comes from the nearby hotspots; if none is available we can't
+      // know the user's region, so show no targets rather than a wrong region's.
       const regionCode = (Array.isArray(hotspotsData) && hotspotsData[0]?.subnational1Code)
         ? hotspotsData[0].subnational1Code
-        : 'US-WA';
+        : null;
 
-      const sppRes = await fetch(`/api/ebird/spplist?regionCode=${encodeURIComponent(regionCode)}`);
-      if (sppRes.ok) {
-        const sppCodes: string[] = await sppRes.json();
-        if (Array.isArray(sppCodes)) {
+      if (!regionCode) {
+        setTargetSpecies([]);
+      } else {
+        let sppCodes = sppListCacheRef.current.get(regionCode);
+        if (!sppCodes) {
+          const sppRes = await fetch(
+            `/api/ebird/spplist?regionCode=${encodeURIComponent(regionCode)}`,
+            { signal: controller.signal }
+          );
+          if (sppRes.ok) {
+            const data: unknown = await sppRes.json();
+            if (Array.isArray(data)) {
+              sppCodes = data as string[];
+              sppListCacheRef.current.set(regionCode, sppCodes);
+            }
+          }
+        }
+        if (sppCodes) {
           // Build life set with sciName fallback for target species filtering
           const lifeSet = new Set(lifeListRef.current);
           const lifeSciNames = new Set(
@@ -339,13 +386,17 @@ export default function Home() {
 
       setApiStatus('ok');
       lastFetchRef.current = now;
+      lastFetchKeyRef.current = paramsKey;
       setLastFetch(now);
     } catch {
-      // Only set error if this fetch is still the latest (not superseded)
+      // Aborted/superseded fetches fail silently; only the latest sets error state
       if (gen === fetchGenerationRef.current) setApiStatus('error');
     } finally {
       // Only clear the loading indicator for the latest fetch
-      if (gen === fetchGenerationRef.current) setLoading(false);
+      if (gen === fetchGenerationRef.current) {
+        setLoading(false);
+        inFlightKeyRef.current = null;
+      }
     }
   }, []);
 
@@ -385,11 +436,28 @@ export default function Home() {
     document.documentElement.classList.toggle('dark', !settings.lightMode);
   }, [settings.lightMode]);
 
-  // Auto-refresh
+  // Auto-refresh — skips ticks while the tab is hidden (no point burning API
+  // quota for an invisible map); catches up once when the tab becomes visible.
   useEffect(() => {
     if (settings.autoRefresh === 0) return;
-    const interval = setInterval(() => fetchData(true), settings.autoRefresh * 60 * 1000);
-    return () => clearInterval(interval);
+    const intervalMs = settings.autoRefresh * 60 * 1000;
+    const interval = setInterval(() => {
+      if (document.visibilityState === 'hidden') return;
+      fetchData(true);
+    }, intervalMs);
+    const onVisibilityChange = () => {
+      if (
+        document.visibilityState === 'visible' &&
+        Date.now() - lastFetchRef.current >= intervalMs
+      ) {
+        fetchData(true);
+      }
+    };
+    document.addEventListener('visibilitychange', onVisibilityChange);
+    return () => {
+      clearInterval(interval);
+      document.removeEventListener('visibilitychange', onVisibilityChange);
+    };
   }, [settings.autoRefresh, fetchData]);
 
   // Re-classify when life list changes (no refetch)
@@ -421,23 +489,23 @@ export default function Home() {
 
   function handleAddToLifeList(code: string, name: string, sciName?: string, date?: string, location?: string) {
     setLifeList((prev) => addToLifeList(prev, code));
-    if (date || location) {
-      setLifeListMeta((prev) => {
-        if (prev[code]) return prev;
-        const next = {
-          ...prev,
-          [code]: {
-            comName: name,
-            sciName: sciName ?? '',
-            firstDate: date ?? '',
-            firstLocation: location ?? '',
-            totalCount: 1,
-          },
-        };
-        saveLifeListMeta(next);
-        return next;
-      });
-    }
+    // Always persist at least the name — without meta, entries added away from
+    // home degrade to raw species codes after a reload in a different area
+    setLifeListMeta((prev) => {
+      if (prev[code]) return prev;
+      const next = {
+        ...prev,
+        [code]: {
+          comName: name,
+          sciName: sciName ?? '',
+          firstDate: date ?? '',
+          firstLocation: location ?? '',
+          totalCount: 1,
+        },
+      };
+      saveLifeListMeta(next);
+      return next;
+    });
   }
 
   function handlePinDrop(lat: number, lng: number) {

@@ -32,12 +32,20 @@ export default function SettingsPanel({ settings, onChange, apiStatus, onRefresh
     : apiStatus === 'error' ? 'Connection error'
     : 'Idle';
 
-  const radiusKm = settings.searchRadius;
-  const radiusDisplay = settings.useMetric
-    ? `${radiusKm} km`
-    : `${Math.round(radiusKm * 0.621371)} mi`;
-  const minLabel = settings.useMetric ? '5 km' : '3 mi';
-  const maxLabel = settings.useMetric ? '50 km' : '31 mi';
+  const KM_PER_MI = 1.609344;
+  const sliderMin = 5;
+  const sliderMax = settings.useMetric ? 50 : 30;
+  const sliderStep = 5;
+  const sliderUnit = settings.useMetric ? 'km' : 'mi';
+  // Convert stored km to display unit, snap to step grid, then clamp to [min, max]
+  const rawDisplay = settings.useMetric
+    ? settings.searchRadius
+    : settings.searchRadius / KM_PER_MI;
+  const sliderValue = Math.min(sliderMax, Math.max(sliderMin,
+    Math.round(rawDisplay / sliderStep) * sliderStep));
+  const radiusDisplay = `${sliderValue} ${sliderUnit}`;
+  const minLabel = `${sliderMin} ${sliderUnit}`;
+  const maxLabel = `${sliderMax} ${sliderUnit}`;
   const alertRadiusLabel = settings.useMetric ? 'within 16 km' : 'within 10 mi';
 
   return (
@@ -95,9 +103,12 @@ export default function SettingsPanel({ settings, onChange, apiStatus, onRefresh
             </span>
           </div>
           <input
-            type="range" min={5} max={50} step={5}
-            value={settings.searchRadius}
-            onChange={e => set('searchRadius', Number(e.target.value))}
+            type="range" min={sliderMin} max={sliderMax} step={sliderStep}
+            value={sliderValue}
+            onChange={e => {
+              const v = Number(e.target.value);
+              set('searchRadius', settings.useMetric ? v : v * KM_PER_MI);
+            }}
             style={{ width: '100%', accentColor: t.accent }}
           />
           <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: 5, fontSize: 10, color: t.fg3, fontFamily: t.mono }}>

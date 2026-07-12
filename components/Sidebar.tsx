@@ -31,9 +31,9 @@ interface Props {
   focusedSpecies: { code: string; name: string } | null;
   onFlyTo: (lat: number, lng: number) => void;
   onFocusSpecies: (code: string, name: string) => void;
-  onAddToLifeList: (code: string, name: string) => void;
+  onAddToLifeList: (code: string, name: string, sciName?: string) => void;
   onRemoveFromLifeList: (code: string) => void;
-  onAddToYearList: (code: string, name: string) => void;
+  onAddToYearList: (code: string, name: string, sciName?: string) => void;
   onRemoveFromYearList: (code: string) => void;
   onBulkImport: (lifeCodes: string[], yearCodes: string[], meta: Record<string, SpeciesMeta>) => void;
   onClearLifeList: () => void;

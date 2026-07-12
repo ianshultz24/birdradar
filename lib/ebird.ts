@@ -84,8 +84,17 @@ export function fmtDist(km: number, useMetric = true): string {
   return `${Math.round(mi)} mi`;
 }
 
+/**
+ * Parse an eBird obsDt string ("YYYY-MM-DD HH:mm").
+ * The space-separated format is not parseable by Safari/iOS `new Date()` —
+ * always go through here instead of calling `new Date(obsDt)` directly.
+ */
+export function parseObsDt(dateStr: string): Date {
+  return new Date(dateStr.replace(' ', 'T'));
+}
+
 export function timeAgo(dateStr: string): string {
-  const date = new Date(dateStr.replace(' ', 'T'));
+  const date = parseObsDt(dateStr);
   const now = new Date();
   const diffMs = now.getTime() - date.getTime();
   const diffMins = Math.floor(diffMs / 60000);
@@ -121,11 +130,7 @@ export function mergeObservations(
   for (const obs of withFlags) {
     const key = `${obs.speciesCode}|${obs.locId || obs.locName}`;
     const existing = seen.get(key);
-    if (
-      !existing ||
-      new Date(obs.obsDt.replace(' ', 'T')) >
-        new Date(existing.obsDt.replace(' ', 'T'))
-    ) {
+    if (!existing || parseObsDt(obs.obsDt) > parseObsDt(existing.obsDt)) {
       seen.set(key, obs);
     }
   }

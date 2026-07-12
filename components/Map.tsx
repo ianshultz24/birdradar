@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   MapContainer,
   TileLayer,
@@ -91,6 +91,10 @@ const TIER_ORDER: Record<string, number> = { 'lifer-rare': 0, lifer: 1, rare: 2,
 
 // ─── Bird pin icon (teardrop SVG, anchored at tip) ────────────────────────────
 
+// Icons are pure functions of a few discrete inputs — cache them so re-renders
+// reuse L.DivIcon instances instead of rebuilding ~400 of them each time.
+const birdPinIconCache = new Map<string, L.DivIcon>();
+
 function birdPinIcon(
   tier: ClassifiedObservation['tier'],
   pulse: boolean,
@@ -98,6 +102,10 @@ function birdPinIcon(
   focused = false,
   lightMode = false,
 ): L.DivIcon {
+  const cacheKey = `${tier}|${pulse}|${opacity}|${focused}|${lightMode}`;
+  const cached = birdPinIconCache.get(cacheKey);
+  if (cached) return cached;
+
   const tc = lightMode ? TIER_COLORS_LIGHT : TIER_COLORS_DARK;
   const color = tc[tier as TierKey] ?? tc.seen;
   const dotBg = lightMode ? '#FFFFFF' : '#111113';
@@ -124,53 +132,70 @@ function birdPinIcon(
     ? `<circle cx="10" cy="9.5" r="6.5" fill="none" stroke="${color}" stroke-width="1.5" opacity="0.45"/>`
     : '';
 
-  return L.divIcon({
+  const icon = L.divIcon({
     className: '',
     html: `<div class="${pulseClass}" style="display:inline-block;transform-origin:50% 100%;opacity:${opacity};--pin-glow-lo:${glowLo};--pin-glow-hi:${glowHi}"><svg width="${w}" height="${h}" viewBox="0 0 20 28" fill="none" overflow="visible"><path d="M10 0C4.5 0 0 4.5 0 10c0 7 10 18 10 18s10-11 10-18C20 4.5 15.5 0 10 0z" fill="${color}" opacity="${focused ? 1 : 0.88}"/>${focusRing}<circle cx="10" cy="9.5" r="3.5" fill="${dotBg}" opacity="0.88"/></svg></div>`,
     iconSize: [w, h],
     iconAnchor: [Math.round(w / 2), h],
     popupAnchor: [0, -(h + 4)],
   });
+  birdPinIconCache.set(cacheKey, icon);
+  return icon;
 }
 
 // ─── Hotspot dot icon (circle, heatmap colored) ───────────────────────────────
 
+const hotspotIconCache = new Map<number, L.DivIcon>();
+
 function hotspotIcon(ratio: number): L.DivIcon {
-  const color = hotspotHeatColor(ratio);
+  // Quantize to 20 heat buckets — visually identical, keeps the cache tiny
+  const bucket = Math.round(Math.min(Math.max(ratio, 0), 1) * 20) / 20;
+  const cached = hotspotIconCache.get(bucket);
+  if (cached) return cached;
+
+  const color = hotspotHeatColor(bucket);
   const size = 10;
-  return L.divIcon({
+  const icon = L.divIcon({
     className: '',
     html: `<div style="width:${size}px;height:${size}px;border-radius:50%;background:${color};opacity:0.88;box-shadow:0 1px 4px rgba(0,0,0,0.28);border:1.5px solid rgba(255,255,255,0.45);"></div>`,
     iconSize: [size, size],
     iconAnchor: [size / 2, size / 2],
     popupAnchor: [0, -(size / 2 + 4)],
   });
+  hotspotIconCache.set(bucket, icon);
+  return icon;
 }
 
 // ─── User location dot ────────────────────────────────────────────────────────
 
+let userLocationIconCached: L.DivIcon | null = null;
+
 function userLocationIcon(): L.DivIcon {
+  if (userLocationIconCached) return userLocationIconCached;
   const size = 16;
-  return L.divIcon({
+  return (userLocationIconCached = L.divIcon({
     className: '',
     html: `<div style="width:${size}px;height:${size}px;border-radius:50%;background:#3b82f6;border:3px solid #fff;box-shadow:0 0 0 2px rgba(59,130,246,0.35),0 2px 8px rgba(0,0,0,0.2);"></div>`,
     iconSize: [size, size],
     iconAnchor: [size / 2, size / 2],
     popupAnchor: [0, -(size / 2 + 4)],
-  });
+  }));
 }
 
 // ─── Drop-pin marker (amber, indicates custom search center) ──────────────────
 
+let pinDropIconCached: L.DivIcon | null = null;
+
 function pinDropIcon(): L.DivIcon {
+  if (pinDropIconCached) return pinDropIconCached;
   const w = 20, h = 28;
-  return L.divIcon({
+  return (pinDropIconCached = L.divIcon({
     className: '',
     html: `<svg width="${w}" height="${h}" viewBox="0 0 20 28" fill="none" overflow="visible"><path d="M10 0C4.5 0 0 4.5 0 10c0 7 10 18 10 18s10-11 10-18C20 4.5 15.5 0 10 0z" fill="#F59E0B" opacity="0.9"/><circle cx="10" cy="9.5" r="3.5" fill="white" opacity="0.88"/></svg>`,
     iconSize: [w, h],
     iconAnchor: [w / 2, h],
     popupAnchor: [0, -(h + 6)],
-  });
+  }));
 }
 
 // ─── RecenterController ───────────────────────────────────────────────────────
@@ -544,23 +569,49 @@ export default function BirdMap({
     setIsPinMode(false);
   }
 
-  const lifeSet = new Set(lifeList);
+  const lifeSet = useMemo(() => new Set(lifeList), [lifeList]);
   const { lightMode } = settings;
 
-  const visibleObs = settings.dimSeenSpecies
-    ? observations
-    : observations.filter(o => o.tier !== 'seen' && o.tier !== 'rare');
+  const visibleObs = useMemo(
+    () => settings.dimSeenSpecies
+      ? observations
+      : observations.filter(o => o.tier !== 'seen' && o.tier !== 'rare'),
+    [observations, settings.dimSeenSpecies]
+  );
 
-  const hotspotRecentSpecies = new Map<string, Set<string>>();
-  for (const obs of observations) {
-    if (obs.locId) {
-      if (!hotspotRecentSpecies.has(obs.locId)) hotspotRecentSpecies.set(obs.locId, new Set());
-      hotspotRecentSpecies.get(obs.locId)!.add(obs.speciesCode);
+  const { getHotspotHeat, maxHeat } = useMemo(() => {
+    const hotspotRecentSpecies = new Map<string, Set<string>>();
+    for (const obs of observations) {
+      if (obs.locId) {
+        if (!hotspotRecentSpecies.has(obs.locId)) hotspotRecentSpecies.set(obs.locId, new Set());
+        hotspotRecentSpecies.get(obs.locId)!.add(obs.speciesCode);
+      }
     }
-  }
-  const getHotspotHeat = (hs: typeof hotspots[0]) =>
-    Math.max(hs.numSpeciesAllTime || 0, hotspotRecentSpecies.get(hs.locId)?.size ?? 0);
-  const maxHeat = Math.max(...hotspots.map(getHotspotHeat), 1);
+    const getHotspotHeat = (hs: Hotspot) =>
+      Math.max(hs.numSpeciesAllTime || 0, hotspotRecentSpecies.get(hs.locId)?.size ?? 0);
+    const maxHeat = Math.max(...hotspots.map(getHotspotHeat), 1);
+    return { getHotspotHeat, maxHeat };
+  }, [observations, hotspots]);
+
+  // Group observations by location and sort each group (focused species first,
+  // then by tier priority) — memoized so panning/hover re-renders don't redo it.
+  const markerGroups = useMemo(() => {
+    const groups = new Map<string, ClassifiedObservation[]>();
+    for (const obs of visibleObs) {
+      const key = obs.locId || obs.locName;
+      if (!groups.has(key)) groups.set(key, []);
+      groups.get(key)!.push(obs);
+    }
+    for (const group of groups.values()) {
+      group.sort((a, b) => {
+        const aFoc = focusedSpecies?.code === a.speciesCode ? -1 : 0;
+        const bFoc = focusedSpecies?.code === b.speciesCode ? -1 : 0;
+        if (aFoc !== bFoc) return aFoc - bFoc;
+        return TIER_ORDER[a.tier] - TIER_ORDER[b.tier];
+      });
+    }
+    return Array.from(groups.entries());
+  }, [visibleObs, focusedSpecies]);
 
   const tileUrl = lightMode
     ? 'https://tiles.stadiamaps.com/tiles/alidade_smooth/{z}/{x}/{y}.png'
@@ -636,46 +687,30 @@ export default function BirdMap({
           })}
 
         {/* Bird sighting pin markers — grouped by location */}
-        {(() => {
-          const groups = new Map<string, ClassifiedObservation[]>();
-          for (const obs of visibleObs) {
-            const key = obs.locId || obs.locName;
-            if (!groups.has(key)) groups.set(key, []);
-            groups.get(key)!.push(obs);
-          }
-          for (const group of groups.values()) {
-            group.sort((a, b) => {
-              const aFoc = focusedSpecies?.code === a.speciesCode ? -1 : 0;
-              const bFoc = focusedSpecies?.code === b.speciesCode ? -1 : 0;
-              if (aFoc !== bFoc) return aFoc - bFoc;
-              return TIER_ORDER[a.tier] - TIER_ORDER[b.tier];
-            });
-          }
-          return Array.from(groups.entries()).map(([locKey, group]) => {
-            const repObs = group[0];
-            const isFocused = !!(focusedSpecies && group.some(o => o.speciesCode === focusedSpecies.code));
-            const isSeenTier = repObs.tier === 'seen' || repObs.tier === 'rare';
-            const baseOpacity = isSeenTier && settings.dimSeenSpecies ? 0.3 : 1;
-            const focusOpacity = focusedSpecies && !isFocused ? 0.18 : 1;
-            const opacity = baseOpacity * focusOpacity;
-            return (
-              <Marker
-                key={locKey}
-                position={[repObs.lat, repObs.lng]}
-                icon={birdPinIcon(repObs.tier, settings.liferPulse, opacity, isFocused, settings.lightMode)}
-              >
-                <Popup className="bird-popup">
-                  <MultiObsPopup
-                    observations={group}
-                    onAddToLifeList={onAddToLifeList}
-                    lifeSet={lifeSet}
-                    lightMode={lightMode}
-                  />
-                </Popup>
-              </Marker>
-            );
-          });
-        })()}
+        {markerGroups.map(([locKey, group]) => {
+          const repObs = group[0];
+          const isFocused = !!(focusedSpecies && group.some(o => o.speciesCode === focusedSpecies.code));
+          const isSeenTier = repObs.tier === 'seen' || repObs.tier === 'rare';
+          const baseOpacity = isSeenTier && settings.dimSeenSpecies ? 0.3 : 1;
+          const focusOpacity = focusedSpecies && !isFocused ? 0.18 : 1;
+          const opacity = baseOpacity * focusOpacity;
+          return (
+            <Marker
+              key={locKey}
+              position={[repObs.lat, repObs.lng]}
+              icon={birdPinIcon(repObs.tier, settings.liferPulse, opacity, isFocused, settings.lightMode)}
+            >
+              <Popup className="bird-popup">
+                <MultiObsPopup
+                  observations={group}
+                  onAddToLifeList={onAddToLifeList}
+                  lifeSet={lifeSet}
+                  lightMode={lightMode}
+                />
+              </Popup>
+            </Marker>
+          );
+        })}
 
         {/* User GPS location dot */}
         {userLocation && (
@@ -739,6 +774,7 @@ export default function BirdMap({
         {onRefreshNow && (
           <button
             onClick={onRefreshNow}
+            disabled={loading}
             title="Refresh bird data"
             onMouseEnter={() => setHoveredMapBtn('refresh')}
             onMouseLeave={() => setHoveredMapBtn(null)}

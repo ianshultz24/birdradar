@@ -6,6 +6,21 @@ const YEARLIST_KEY = 'birdradar_yearlist';
 const META_KEY = 'birdradar_lifelist_meta';
 const SETTINGS_KEY = 'birdradar_settings';
 
+/**
+ * localStorage.setItem throws on quota exceeded or in restricted contexts
+ * (e.g. some private-browsing modes). Swallow the error so a failed save
+ * never crashes a React state update; returns false on failure.
+ */
+function safeSetItem(key: string, value: string): boolean {
+  if (typeof window === 'undefined') return false;
+  try {
+    localStorage.setItem(key, value);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 export interface SpeciesMeta {
   comName: string;
   sciName: string;
@@ -25,8 +40,7 @@ export function getLifeList(): string[] {
 }
 
 export function saveLifeList(list: string[]): void {
-  if (typeof window === 'undefined') return;
-  localStorage.setItem(LIFELIST_KEY, JSON.stringify(list));
+  safeSetItem(LIFELIST_KEY, JSON.stringify(list));
 }
 
 export function addToLifeList(current: string[], speciesCode: string): string[] {
@@ -67,8 +81,7 @@ export function getYearList(): string[] {
 }
 
 export function saveYearList(list: string[]): void {
-  if (typeof window === 'undefined') return;
-  localStorage.setItem(YEARLIST_KEY, JSON.stringify(list));
+  safeSetItem(YEARLIST_KEY, JSON.stringify(list));
 }
 
 export function addToYearList(current: string[], speciesCode: string): string[] {
@@ -108,8 +121,7 @@ export function getLifeListMeta(): Record<string, SpeciesMeta> {
 }
 
 export function saveLifeListMeta(meta: Record<string, SpeciesMeta>): void {
-  if (typeof window === 'undefined') return;
-  localStorage.setItem(META_KEY, JSON.stringify(meta));
+  safeSetItem(META_KEY, JSON.stringify(meta));
 }
 
 // ─── Settings ────────────────────────────────────────────────────────────────
@@ -125,6 +137,5 @@ export function getSettings(): AppSettings {
 }
 
 export function saveSettings(settings: AppSettings): void {
-  if (typeof window === 'undefined') return;
-  localStorage.setItem(SETTINGS_KEY, JSON.stringify(settings));
+  safeSetItem(SETTINGS_KEY, JSON.stringify(settings));
 }

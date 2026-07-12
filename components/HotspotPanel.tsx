@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from 'react';
 import type { Hotspot, Observation } from '@/lib/ebird';
-import { timeAgo } from '@/lib/ebird';
+import { timeAgo, parseObsDt } from '@/lib/ebird';
 import { getTheme } from '@/lib/theme';
 import { CheckIcon } from '@/components/Icons';
 
@@ -10,7 +10,7 @@ interface Props {
   hotspot: Hotspot;
   lifeList: string[];
   onClose: () => void;
-  onAddToLifeList: (code: string, name: string) => void;
+  onAddToLifeList: (code: string, name: string, sciName?: string) => void;
   lightMode: boolean;
 }
 
@@ -43,9 +43,9 @@ export default function HotspotPanel({ hotspot, lifeList, onClose, onAddToLifeLi
         const seen = new Map<string, Observation>();
         for (const o of data) {
           const existing = seen.get(o.speciesCode);
-          if (!existing || new Date(o.obsDt) > new Date(existing.obsDt)) seen.set(o.speciesCode, o);
+          if (!existing || parseObsDt(o.obsDt) > parseObsDt(existing.obsDt)) seen.set(o.speciesCode, o);
         }
-        setObs(Array.from(seen.values()).sort((a, b) => new Date(b.obsDt).getTime() - new Date(a.obsDt).getTime()));
+        setObs(Array.from(seen.values()).sort((a, b) => parseObsDt(b.obsDt).getTime() - parseObsDt(a.obsDt).getTime()));
       })
       .catch((e: unknown) => { if ((e as { name?: string }).name !== 'AbortError') setError(true); })
       .finally(() => { if (!controller.signal.aborted) setLoading(false); });
@@ -138,7 +138,7 @@ export default function HotspotPanel({ hotspot, lifeList, onClose, onAddToLifeLi
                 {o.howMany && <span style={{ fontSize: 10, color: t.fg3, fontFamily: t.mono }}>×{o.howMany}</span>}
                 {!onList ? (
                   <button
-                    onClick={() => onAddToLifeList(o.speciesCode, o.comName)}
+                    onClick={() => onAddToLifeList(o.speciesCode, o.comName, o.sciName)}
                     onMouseEnter={() => setHoveredAddCode(o.speciesCode)}
                     onMouseLeave={() => setHoveredAddCode(null)}
                     style={{
