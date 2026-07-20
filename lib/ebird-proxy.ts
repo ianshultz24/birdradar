@@ -242,6 +242,8 @@ export interface ProxyOptions {
   sMaxAge: number;
   /** stale-while-revalidate window in seconds */
   staleWhileRevalidate: number;
+  /** Applied to the upstream JSON before caching/returning (e.g. field stripping) */
+  transform?: (data: unknown) => unknown;
 }
 
 export async function proxyEbird(request: NextRequest, opts: ProxyOptions): Promise<Response> {
@@ -305,7 +307,8 @@ export async function proxyEbird(request: NextRequest, opts: ProxyOptions): Prom
       );
     }
 
-    const data = await res.json();
+    const raw = await res.json();
+    const data = opts.transform ? opts.transform(raw) : raw;
     await cacheSet(opts.upstreamPath, data, opts.sMaxAge * 1000);
     return Response.json(data, { headers: cacheHeaders });
   } catch {

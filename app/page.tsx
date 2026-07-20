@@ -13,6 +13,7 @@ import { useMobile } from '@/hooks/useMobile';
 import { mergeObservations, DEFAULT_SETTINGS, fmtDist } from '@/lib/ebird';
 import type { Observation, Hotspot, ClassifiedObservation, AppSettings, TargetSpecies } from '@/lib/ebird';
 import { classifyAll } from '@/lib/classify';
+import { migrateStaleCodesOnce } from '@/lib/taxonomy';
 import { sendBrowserNotification, playAlertBeep } from '@/lib/notifications';
 import {
   getLifeList,
@@ -37,44 +38,6 @@ const RATE_LIMIT_MS = 5 * 60 * 1000;
 /** Minimum gap between forced refreshes of the same location+radius (spam-click guard) */
 const MIN_FORCE_INTERVAL_MS = 15 * 1000;
 const LIFER_ALERT_RADIUS_KM = 16.09; // 10 miles
-
-/**
- * Reconcile stale PNW_SPECIES codes in the life list against live eBird observation codes.
- * When a CSV import stores code "bufhea" but eBird API returns "buffle" for the same
- * scientific name, this replaces the stale code with the correct one.
- */
-function reconcileLifeListCodes(
-  currentList: string[],
-  meta: Record<string, SpeciesMeta>,
-  observations: ClassifiedObservation[]
-): { newList: string[]; newMeta: Record<string, SpeciesMeta>; changed: boolean } {
-  // Build sciName → correct eBird code from live observations
-  const sciToCode = new Map<string, string>();
-  for (const obs of observations) {
-    if (obs.sciName && !sciToCode.has(obs.sciName.toLowerCase())) {
-      sciToCode.set(obs.sciName.toLowerCase(), obs.speciesCode);
-    }
-  }
-
-  let list = [...currentList];
-  const newMeta: Record<string, SpeciesMeta> = { ...meta };
-  let changed = false;
-
-  for (const [code, m] of Object.entries(meta)) {
-    if (!m.sciName) continue;
-    const correctCode = sciToCode.get(m.sciName.toLowerCase());
-    if (!correctCode || correctCode === code) continue;
-
-    // Swap stale code → correct code
-    changed = true;
-    list = list.filter((c) => c !== code);
-    if (!list.includes(correctCode)) list.push(correctCode);
-    delete newMeta[code];
-    newMeta[correctCode] = m;
-  }
-
-  return { newList: list, newMeta, changed };
-}
 
 function haversineKm(lat1: number, lng1: number, lat2: number, lng2: number): number {
   const R = 6371;
@@ -145,8 +108,6 @@ export default function Home() {
   const isFirstFetchRef = useRef(true);
   /** Incremented each time fetchData starts; lets in-flight fetches detect they've been superseded */
   const fetchGenerationRef = useRef(0);
-  /** True after the first successful fetch has triggered a life list code reconciliation */
-  const hasReconciledRef = useRef(false);
   /** Params key of the fetch currently in flight (null when idle) */
   const inFlightKeyRef = useRef<string | null>(null);
   /** Params key of the last successfully completed fetch */
@@ -257,7 +218,7 @@ export default function Home() {
       const activeList = settingsRef.current.yearListActive
         ? yearListRef.current
         : lifeListRef.current;
-      const classified = classifyAll(merged, activeList, lifeListMetaRef.current);
+      const classified = classifyAll(merged, activeList);
 
       // Attach report counts to each classified observation
       const withFreq: ClassifiedObservation[] = classified.map((obs) => ({
@@ -267,24 +228,6 @@ export default function Home() {
 
       setObservations(withFreq);
       setHotspots(Array.isArray(hotspotsData) ? hotspotsData : []);
-
-      // ─── One-time code reconciliation ──────────────────────────────────────
-      // On the first successful fetch, fix any stale PNW_SPECIES codes stored in
-      // the life list so they match the codes eBird API actually returns.
-      if (!hasReconciledRef.current && lifeListMetaRef.current) {
-        hasReconciledRef.current = true;
-        const { newList, newMeta, changed } = reconcileLifeListCodes(
-          lifeListRef.current,
-          lifeListMetaRef.current,
-          withFreq
-        );
-        if (changed) {
-          setLifeList(newList);
-          saveLifeList(newList);
-          setLifeListMeta(newMeta);
-          saveLifeListMeta(newMeta);
-        }
-      }
 
       // ─── Target Species ────────────────────────────────────────────────────
       // Region comes from the nearby hotspots; if none is available we can't
@@ -311,13 +254,7 @@ export default function Home() {
           }
         }
         if (sppCodes) {
-          // Build life set with sciName fallback for target species filtering
           const lifeSet = new Set(lifeListRef.current);
-          const lifeSciNames = new Set(
-            Object.values(lifeListMetaRef.current)
-              .map((m) => m.sciName?.toLowerCase())
-              .filter((s): s is string => !!s)
-          );
           const nearbyFreq = new Map<string, number>();
           for (const obs of merged) {
             nearbyFreq.set(obs.speciesCode, (nearbyFreq.get(obs.speciesCode) ?? 0) + 1);
@@ -328,12 +265,7 @@ export default function Home() {
           }
 
           const targets: TargetSpecies[] = sppCodes
-            .filter((code) => {
-              const obs = obsByCode.get(code);
-              if (!obs) return false;
-              // Exclude if on life list by code or by sciName (handles stale codes)
-              return !lifeSet.has(code) && !lifeSciNames.has(obs.sciName?.toLowerCase() ?? '');
-            })
+            .filter((code) => obsByCode.has(code) && !lifeSet.has(code))
             .map((code) => {
               const obs = obsByCode.get(code)!;
               return {
@@ -464,26 +396,44 @@ export default function Home() {
   useEffect(() => {
     if (settings.yearListActive) return;
     setObservations((prev) =>
-      prev.length > 0 ? classifyAll(prev, lifeList, lifeListMeta) : prev
+      prev.length > 0 ? classifyAll(prev, lifeList) : prev
     );
-  }, [lifeList, lifeListMeta, settings.yearListActive]);
+  }, [lifeList, settings.yearListActive]);
 
   // Re-classify when year list changes (in year list mode)
   useEffect(() => {
     if (!settings.yearListActive) return;
     setObservations((prev) =>
-      prev.length > 0 ? classifyAll(prev, yearList, lifeListMeta) : prev
+      prev.length > 0 ? classifyAll(prev, yearList) : prev
     );
-  }, [yearList, lifeListMeta, settings.yearListActive]);
+  }, [yearList, settings.yearListActive]);
 
   // Re-classify when switching between life/year list mode
   useEffect(() => {
     const activeList = settings.yearListActive ? yearList : lifeList;
     setObservations((prev) =>
-      prev.length > 0 ? classifyAll(prev, activeList, lifeListMeta) : prev
+      prev.length > 0 ? classifyAll(prev, activeList) : prev
     );
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [settings.yearListActive]);
+
+  // One-time migration of stale legacy species codes (old hardcoded PNW list)
+  // to canonical eBird taxonomy codes. Delayed so it never competes with the
+  // initial observation fetch; no-ops instantly on already-migrated devices.
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      migrateStaleCodesOnce()
+        .then((changed) => {
+          if (changed) {
+            setLifeList(getLifeList());
+            setYearList(getYearList());
+            setLifeListMeta(getLifeListMeta());
+          }
+        })
+        .catch(() => { /* offline — retries next session */ });
+    }, 4000);
+    return () => clearTimeout(timer);
+  }, []);
 
   // ─── Handlers ─────────────────────────────────────────────────────────────
 
@@ -548,29 +498,17 @@ export default function Home() {
     yearCodes: string[],
     meta: Record<string, SpeciesMeta>
   ) {
-    // Merge new codes into the existing lists (deduped)
+    // Codes arrive canonical (resolved against the full eBird taxonomy at
+    // import time) — just merge and dedupe
     const existingLife = new Set(lifeList);
-    const rawLifeList = [...lifeList, ...lifeCodes.filter((c) => !existingLife.has(c))];
+    const newList = [...lifeList, ...lifeCodes.filter((c) => !existingLife.has(c))];
     const mergedMeta = { ...lifeListMeta, ...meta };
-
-    // Immediately reconcile stale PNW_SPECIES codes using live observation codes
-    const { newList, newMeta } = reconcileLifeListCodes(rawLifeList, mergedMeta, observations);
-
-    // Reconcile year codes through the same mapping
-    const codeRemap = new Map<string, string>();
-    for (const [oldCode, m] of Object.entries(mergedMeta)) {
-      if (newMeta[oldCode] === undefined) {
-        const correctCode = Object.keys(newMeta).find((k) => newMeta[k] === m);
-        if (correctCode) codeRemap.set(oldCode, correctCode);
-      }
-    }
-    const reconciledYearCodes = yearCodes.map((c) => codeRemap.get(c) ?? c);
 
     setLifeList(newList);
     saveLifeList(newList);
-    setYearList((prev) => bulkAddToYearList(prev, reconciledYearCodes));
-    setLifeListMeta(newMeta);
-    saveLifeListMeta(newMeta);
+    setYearList((prev) => bulkAddToYearList(prev, yearCodes));
+    setLifeListMeta(mergedMeta);
+    saveLifeListMeta(mergedMeta);
   }
 
   type Tab = 'alerts' | 'lifelist' | 'settings';

@@ -1,9 +1,8 @@
 'use client';
 
-import { useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import type { ClassifiedObservation } from '@/lib/ebird';
-import { searchSpecies, type SpeciesEntry } from '@/lib/species-data';
-import { PNW_SPECIES } from '@/lib/species-data';
+import { loadTaxonomy, searchTaxonomy, type SpeciesEntry } from '@/lib/taxonomy';
 import type { SpeciesMeta } from '@/lib/lifelist';
 import { getTheme } from '@/lib/theme';
 import { SearchIcon, UploadIcon, DownloadIcon, XIcon, CheckIcon } from '@/components/Icons';
@@ -84,6 +83,8 @@ export default function LifeListPanel({
 }: Props) {
   const [query, setQuery] = useState('');
   const [results, setResults] = useState<SpeciesEntry[]>([]);
+  const [taxonomy, setTaxonomy] = useState<SpeciesEntry[] | null>(null);
+  const [taxonomyLoading, setTaxonomyLoading] = useState(false);
   const [importToast, setImportToast] = useState<string | null>(null);
   const [confirmClear, setConfirmClear] = useState(false);
   const [hoveredCode, setHoveredCode] = useState<string | null>(null);
@@ -102,10 +103,30 @@ export default function LifeListPanel({
   const liferOps = observations.filter(o => o.tier === 'lifer' || o.tier === 'lifer-rare');
   const uniqueLiferOps = new Set(liferOps.map(o => o.speciesCode)).size;
 
+  function ensureTaxonomy() {
+    if (taxonomy || taxonomyLoading) return;
+    setTaxonomyLoading(true);
+    loadTaxonomy()
+      .then(setTaxonomy)
+      .catch(() => showToast('Could not load species database — check your connection.'))
+      .finally(() => setTaxonomyLoading(false));
+  }
+
   function handleSearch(q: string) {
     setQuery(q);
-    setResults(q.trim() ? searchSpecies(q) : []);
+    if (!taxonomy) {
+      ensureTaxonomy();
+      setResults([]);
+      return;
+    }
+    setResults(q.trim() ? searchTaxonomy(taxonomy, q) : []);
   }
+
+  // Taxonomy arriving after the user already typed — run their pending query
+  useEffect(() => {
+    if (taxonomy && query.trim()) setResults(searchTaxonomy(taxonomy, query));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [taxonomy]);
 
   function showToast(msg: string, ms = 5000) {
     setImportToast(msg);
@@ -163,12 +184,23 @@ export default function LifeListPanel({
     const isJSON = file.name.toLowerCase().endsWith('.json');
 
     const reader = new FileReader();
-    reader.onload = (ev) => {
+    reader.onload = async (ev) => {
       const text = ev.target?.result as string;
       if (isJSON) {
         handleJSONImport(text);
         return;
       }
+
+      // Name→code resolution needs the full taxonomy (eBird CSV exports carry
+      // no species codes)
+      let tax: SpeciesEntry[];
+      try {
+        tax = await loadTaxonomy();
+      } catch {
+        showToast('Could not load species database — check your connection and retry.');
+        return;
+      }
+
       const lines = text.split(/\r?\n/).filter(Boolean);
       if (lines.length < 2) return;
 
@@ -187,7 +219,7 @@ export default function LifeListPanel({
 
       const byComName = new Map<string, SpeciesEntry>();
       const bySciName = new Map<string, SpeciesEntry>();
-      for (const sp of PNW_SPECIES) {
+      for (const sp of tax) {
         byComName.set(sp.comName.toLowerCase(), sp);
         if (sp.sciName) bySciName.set(sp.sciName.toLowerCase(), sp);
       }
@@ -298,8 +330,9 @@ export default function LifeListPanel({
           <SearchIcon size={14} style={{ position: 'absolute', left: 10, top: '50%', transform: 'translateY(-50%)', color: t.fg3 }}/>
           <input
             type="text"
-            placeholder="Search PNW species to add…"
+            placeholder="Search any species to add…"
             value={query}
+            onFocus={ensureTaxonomy}
             onChange={e => handleSearch(e.target.value)}
             style={{
               width: '100%', padding: '9px 12px 9px 32px',
@@ -318,6 +351,17 @@ export default function LifeListPanel({
             </button>
           )}
         </div>
+
+        {/* Species database loading hint */}
+        {taxonomyLoading && query.trim() && (
+          <div style={{
+            marginTop: -4, marginBottom: 8, padding: '9px 12px',
+            background: t.cardBg, border: `1px solid ${t.line2}`,
+            borderRadius: 8, fontSize: 12, color: t.fg3, fontFamily: t.mono,
+          }}>
+            Loading species database…
+          </div>
+        )}
 
         {/* Search dropdown */}
         {results.length > 0 && (

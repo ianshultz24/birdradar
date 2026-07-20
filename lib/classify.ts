@@ -1,15 +1,10 @@
 import type { Observation, ClassifiedObservation, PriorityTier } from './ebird';
-import type { SpeciesMeta } from './lifelist';
 
 export function classifyObservation(
   obs: Observation,
-  lifeSet: Set<string>,
-  /** Fallback: scientific names of life-list species (handles stale code mismatches) */
-  sciNameSet?: Set<string>
+  lifeSet: Set<string>
 ): ClassifiedObservation {
-  const isOnList =
-    lifeSet.has(obs.speciesCode) ||
-    (!!sciNameSet && !!obs.sciName && sciNameSet.has(obs.sciName.toLowerCase()));
+  const isOnList = lifeSet.has(obs.speciesCode);
   const isNotable = !!obs.notable;
 
   let tier: PriorityTier;
@@ -28,22 +23,10 @@ export function classifyObservation(
 
 export function classifyAll(
   observations: Observation[],
-  lifeList: string[],
-  /** Optional metadata — used to build a sciName fallback set.
-   *  Only sciNames of species whose code is in `lifeList` are included,
-   *  so the fallback is scoped correctly for both life and year list modes. */
-  lifeListMeta?: Record<string, SpeciesMeta>
+  lifeList: string[]
 ): ClassifiedObservation[] {
   const lifeSet = new Set(lifeList);
-  // Map each active-list code to its sciName (handles stale PNW_SPECIES code mismatches)
-  const sciNameSet = lifeListMeta
-    ? new Set(
-        lifeList
-          .map((code) => lifeListMeta[code]?.sciName?.toLowerCase())
-          .filter((s): s is string => !!s)
-      )
-    : undefined;
-  return observations.map((obs) => classifyObservation(obs, lifeSet, sciNameSet));
+  return observations.map((obs) => classifyObservation(obs, lifeSet));
 }
 
 export function getTierLabel(tier: PriorityTier): string {
