@@ -1,10 +1,14 @@
 'use client';
 
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import type { ClassifiedObservation, TargetSpecies } from '@/lib/ebird';
 import { timeAgo, fmtDist, parseObsDt } from '@/lib/ebird';
 import { getTheme, tierTokens, tierLabel, type Theme } from '@/lib/theme';
+import { fetchChaseStats } from '@/lib/chase';
+import ChasePanel from '@/components/ChasePanel';
 import { SearchIcon, XIcon, MapPinIcon, TargetIcon } from '@/components/Icons';
+
+type SortMode = 'recent' | 'closest' | 'chase';
 
 function haversineKm(lat1: number, lng1: number, lat2: number, lng2: number): number {
   const R = 6371;
@@ -32,12 +36,18 @@ export default function AlertsPanel({
   observations, targetSpecies, yearListActive, lightMode, useMetric = true,
   userCenter, focusedSpecies, onFlyTo, onFocusSpecies,
 }: Props) {
-  const [sortBy, setSortBy] = useState<'recent' | 'closest'>('recent');
+  const [sortBy, setSortBy] = useState<SortMode>('recent');
   const [searchQuery, setSearchQuery] = useState('');
-  const [hoveredSort, setHoveredSort] = useState<'recent' | 'closest' | null>(null);
+  const [hoveredSort, setHoveredSort] = useState<SortMode | null>(null);
+  const [chaseScores, setChaseScores] = useState<Map<string, number>>(new Map());
+  const [chaseScoring, setChaseScoring] = useState(false);
   const t = getTheme(lightMode);
 
-  function sortObs(arr: ClassifiedObservation[]): ClassifiedObservation[] {
+  function byRecency(a: ClassifiedObservation, b: ClassifiedObservation): number {
+    return parseObsDt(b.obsDt).getTime() - parseObsDt(a.obsDt).getTime();
+  }
+
+  function sortObs(arr: ClassifiedObservation[], allowChase = false): ClassifiedObservation[] {
     if (sortBy === 'closest') {
       // Precompute distances once instead of inside the comparator (O(n) vs O(n log n) haversines)
       return arr
@@ -45,12 +55,76 @@ export default function AlertsPanel({
         .sort((a, b) => a.d - b.d)
         .map(({ obs }) => obs);
     }
-    return [...arr].sort((a, b) => parseObsDt(b.obsDt).getTime() - parseObsDt(a.obsDt).getTime());
+    if (sortBy === 'chase' && allowChase) {
+      // Scored species first (highest odds), the rest in recency order below.
+      // Scores are fetched lazily for the lifer section only (see effect).
+      return [...arr].sort((a, b) => {
+        const sa = chaseScores.get(a.speciesCode);
+        const sb = chaseScores.get(b.speciesCode);
+        if (sa !== undefined && sb !== undefined) return sb - sa;
+        if (sa !== undefined) return -1;
+        if (sb !== undefined) return 1;
+        return byRecency(a, b);
+      });
+    }
+    return [...arr].sort(byRecency);
   }
 
-  const liferAll = sortObs(observations.filter(o => o.tier === 'lifer-rare' || o.tier === 'lifer'));
+  const liferAll = sortObs(observations.filter(o => o.tier === 'lifer-rare' || o.tier === 'lifer'), true);
   const rare = sortObs(observations.filter(o => o.tier === 'rare'));
   const seen = sortObs(observations.filter(o => o.tier === 'seen'));
+
+  // Stable signature of the lifer species set — drives the chase-scoring effect
+  const liferCodesSig = Array.from(
+    new Set(
+      observations
+        .filter(o => o.tier === 'lifer' || o.tier === 'lifer-rare')
+        .map(o => o.speciesCode)
+    )
+  ).sort().join(',');
+
+  // Lazily score the lifer section when "Chase odds" sort is active. Bounded to
+  // the most-recent unique species and fetched with small concurrency so we
+  // never trip the per-IP rate limit.
+  useEffect(() => {
+    if (sortBy !== 'chase') return;
+    let cancelled = false;
+
+    const repByCode = new Map<string, ClassifiedObservation>();
+    for (const o of observations) {
+      if (o.tier !== 'lifer' && o.tier !== 'lifer-rare') continue;
+      const cur = repByCode.get(o.speciesCode);
+      if (!cur || parseObsDt(o.obsDt) > parseObsDt(cur.obsDt)) repByCode.set(o.speciesCode, o);
+    }
+    const reps = Array.from(repByCode.values()).slice(0, 20); // bound request count
+    if (reps.length === 0) return;
+
+    setChaseScoring(true);
+    const scores = new Map(chaseScores);
+    let idx = 0;
+
+    async function worker() {
+      while (!cancelled && idx < reps.length) {
+        const obs = reps[idx++];
+        if (scores.has(obs.speciesCode)) continue;
+        try {
+          const stats = await fetchChaseStats(obs.speciesCode, obs.lat, obs.lng, 25);
+          if (cancelled) return;
+          scores.set(obs.speciesCode, stats.score);
+          setChaseScores(new Map(scores));
+        } catch {
+          // leave unscored — it sorts below scored species
+        }
+      }
+    }
+
+    const CONCURRENCY = 4;
+    Promise.all(Array.from({ length: Math.min(CONCURRENCY, reps.length) }, worker))
+      .finally(() => { if (!cancelled) setChaseScoring(false); });
+
+    return () => { cancelled = true; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sortBy, liferCodesSig]);
 
   function flyToTarget(speciesCode: string) {
     const matches = observations.filter(o => o.speciesCode === speciesCode);
@@ -116,24 +190,31 @@ export default function AlertsPanel({
             display: 'flex', border: `1px solid ${t.line2}`,
             borderRadius: 8, overflow: 'hidden',
           }}>
-            {(['recent', 'closest'] as const).map(s => (
+            {(['recent', 'closest', 'chase'] as const).map(s => (
               <button
                 key={s}
                 onClick={() => setSortBy(s)}
                 onMouseEnter={() => setHoveredSort(s)}
                 onMouseLeave={() => setHoveredSort(null)}
+                title={s === 'chase' ? 'Rank lifers by how likely the bird is still there' : undefined}
                 style={{
                   flex: 1, padding: '7px 0',
                   background: sortBy === s ? t.accentBg : hoveredSort === s ? t.bg2 : 'transparent',
                   border: 'none',
                   color: sortBy === s ? t.accent : t.fg2,
-                  fontSize: 12, fontWeight: sortBy === s ? 600 : 400,
+                  fontSize: 11.5, fontWeight: sortBy === s ? 600 : 400,
                   cursor: 'pointer', fontFamily: t.sans,
                   transition: 'all 0.12s',
                 }}>
-                {s === 'recent' ? 'Most Recent' : 'Closest'}
+                {s === 'recent' ? 'Recent' : s === 'closest' ? 'Closest' : 'Chase Odds'}
               </button>
             ))}
+          </div>
+        )}
+
+        {!searchActive && sortBy === 'chase' && (
+          <div style={{ marginTop: 6, fontSize: 10.5, color: t.fg3, fontFamily: t.mono, textAlign: 'center' }}>
+            {chaseScoring ? 'Scoring lifers by chase odds…' : 'Lifers ranked by chase odds'}
           </div>
         )}
       </div>
@@ -168,7 +249,7 @@ export default function AlertsPanel({
             searchResults.map(obs => (
               <ObsCard
                 key={`s-${obs.speciesCode}-${obs.locId ?? obs.locName}`}
-                obs={obs} t={t} yearListActive={yearListActive}
+                obs={obs} t={t} lightMode={lightMode} yearListActive={yearListActive}
                 focusedCode={focusedSpecies?.code ?? null}
                 onFlyTo={onFlyTo} onFocusSpecies={onFocusSpecies}
                 distKm={haversineKm(userCenter[0], userCenter[1], obs.lat, obs.lng)}
@@ -198,7 +279,7 @@ export default function AlertsPanel({
             ? <EmptyState text={yearListActive ? 'No new species this year nearby' : 'No lifers nearby'} t={t}/>
             : liferAll.map(obs => (
               <ObsCard key={`${obs.speciesCode}|${obs.locId ?? obs.locName}`}
-                obs={obs} t={t} yearListActive={yearListActive}
+                obs={obs} t={t} lightMode={lightMode} yearListActive={yearListActive}
                 focusedCode={focusedSpecies?.code ?? null}
                 onFlyTo={onFlyTo} onFocusSpecies={onFocusSpecies}
                 distKm={sortBy === 'closest' ? haversineKm(userCenter[0], userCenter[1], obs.lat, obs.lng) : undefined}
@@ -211,7 +292,7 @@ export default function AlertsPanel({
             ? <EmptyState text="No rare species nearby" t={t}/>
             : rare.map(obs => (
               <ObsCard key={`${obs.speciesCode}|${obs.locId ?? obs.locName}`}
-                obs={obs} t={t} yearListActive={yearListActive}
+                obs={obs} t={t} lightMode={lightMode} yearListActive={yearListActive}
                 focusedCode={focusedSpecies?.code ?? null}
                 onFlyTo={onFlyTo} onFocusSpecies={onFocusSpecies}
                 distKm={sortBy === 'closest' ? haversineKm(userCenter[0], userCenter[1], obs.lat, obs.lng) : undefined}
@@ -224,7 +305,7 @@ export default function AlertsPanel({
             ? <EmptyState text="No previously seen species nearby" t={t}/>
             : seen.map(obs => (
               <ObsCard key={`${obs.speciesCode}|${obs.locId ?? obs.locName}`}
-                obs={obs} t={t} yearListActive={yearListActive}
+                obs={obs} t={t} lightMode={lightMode} yearListActive={yearListActive}
                 focusedCode={focusedSpecies?.code ?? null}
                 onFlyTo={onFlyTo} onFocusSpecies={onFocusSpecies}
                 distKm={sortBy === 'closest' ? haversineKm(userCenter[0], userCenter[1], obs.lat, obs.lng) : undefined}
@@ -269,9 +350,10 @@ function EmptyState({ text, t }: { text: string; t: Theme }) {
 
 // ─── Observation card ────────────────────────────────────────────────────────
 
-function ObsCard({ obs, t, yearListActive, focusedCode, onFlyTo, onFocusSpecies, distKm, useMetric }: {
+function ObsCard({ obs, t, lightMode, yearListActive, focusedCode, onFlyTo, onFocusSpecies, distKm, useMetric }: {
   obs: ClassifiedObservation;
   t: Theme;
+  lightMode: boolean;
   yearListActive: boolean;
   focusedCode: string | null;
   onFlyTo: (lat: number, lng: number) => void;
@@ -280,71 +362,98 @@ function ObsCard({ obs, t, yearListActive, focusedCode, onFlyTo, onFocusSpecies,
   useMetric?: boolean;
 }) {
   const [hov, setHov] = useState(false);
+  const [expanded, setExpanded] = useState(false);
   const tc = tierTokens(obs.tier, t);
   const label = tierLabel(obs.tier, yearListActive);
   const focused = focusedCode === obs.speciesCode;
   const dimmed = focusedCode !== null && !focused;
+  // Chase odds are meaningful for anything you'd drive out for; a bird already
+  // on your list (seen tier) isn't a chase target.
+  const showChase = obs.tier !== 'seen';
 
   return (
-    <button
-      onClick={() => { onFlyTo(obs.lat, obs.lng); onFocusSpecies(obs.speciesCode, obs.comName); }}
+    <div
       onMouseEnter={() => setHov(true)}
       onMouseLeave={() => setHov(false)}
       style={{
-        width: '100%', textAlign: 'left',
         background: focused ? tc.bg : hov ? t.bg2 : 'transparent',
-        border: 'none', borderBottom: `1px solid ${t.line1}`,
-        padding: '13px 16px', cursor: 'pointer',
+        borderBottom: `1px solid ${t.line1}`,
         opacity: dimmed ? 0.28 : 1,
-        transition: 'all 0.12s', fontFamily: t.sans, display: 'block',
+        transition: 'all 0.12s', fontFamily: t.sans,
       }}>
-      <div style={{ display: 'flex', alignItems: 'flex-start', gap: 11 }}>
-        {/* Left indicator bar */}
-        <div style={{
-          width: 2, minHeight: 44, borderRadius: 1,
-          background: focused ? tc.color : t.line3,
-          flexShrink: 0, marginTop: 1,
-        }}/>
+      <button
+        onClick={() => { onFlyTo(obs.lat, obs.lng); onFocusSpecies(obs.speciesCode, obs.comName); }}
+        style={{
+          width: '100%', textAlign: 'left', background: 'transparent',
+          border: 'none', padding: '13px 16px 6px', cursor: 'pointer',
+          fontFamily: t.sans, display: 'block',
+        }}>
+        <div style={{ display: 'flex', alignItems: 'flex-start', gap: 11 }}>
+          {/* Left indicator bar */}
+          <div style={{
+            width: 2, minHeight: 44, borderRadius: 1,
+            background: focused ? tc.color : t.line3,
+            flexShrink: 0, marginTop: 1,
+          }}/>
 
-        <div style={{ flex: 1, minWidth: 0 }}>
-          {/* Name + badge row */}
-          <div style={{ display: 'flex', alignItems: 'center', gap: 7, marginBottom: 2 }}>
-            <span style={{
-              fontSize: 13, fontWeight: 600, color: t.fg0,
-              whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
-              fontFamily: t.display,
-            }}>{obs.comName}</span>
-            <span style={{
-              fontSize: 9.5, fontWeight: 600, fontFamily: t.mono,
-              color: tc.color, background: tc.bg,
-              padding: '2px 6px', borderRadius: 4, border: `1px solid ${tc.border}`,
-              letterSpacing: '0.02em', flexShrink: 0, whiteSpace: 'nowrap',
-            }}>{label}</span>
-          </div>
+          <div style={{ flex: 1, minWidth: 0 }}>
+            {/* Name + badge row */}
+            <div style={{ display: 'flex', alignItems: 'center', gap: 7, marginBottom: 2 }}>
+              <span style={{
+                fontSize: 13, fontWeight: 600, color: t.fg0,
+                whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
+                fontFamily: t.display,
+              }}>{obs.comName}</span>
+              <span style={{
+                fontSize: 9.5, fontWeight: 600, fontFamily: t.mono,
+                color: tc.color, background: tc.bg,
+                padding: '2px 6px', borderRadius: 4, border: `1px solid ${tc.border}`,
+                letterSpacing: '0.02em', flexShrink: 0, whiteSpace: 'nowrap',
+              }}>{label}</span>
+            </div>
 
-          {/* Scientific name */}
-          <div style={{ fontSize: 11.5, color: t.fg2, fontStyle: 'italic', marginBottom: 7 }}>
-            {obs.sciName}
-          </div>
+            {/* Scientific name */}
+            <div style={{ fontSize: 11.5, color: t.fg2, fontStyle: 'italic', marginBottom: 7 }}>
+              {obs.sciName}
+            </div>
 
-          {/* Meta row */}
-          <div style={{ display: 'flex', alignItems: 'center', gap: 3, fontSize: 11.5, color: t.fg2, flexWrap: 'wrap' }}>
-            <MapPinIcon size={11} style={{ color: t.fg4, flexShrink: 0 }}/>
-            <span style={{ maxWidth: 150, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-              {obs.locName}
-            </span>
-            {distKm !== undefined && (
-              <>
-                <span style={{ color: t.fg4, margin: '0 2px' }}>·</span>
-                <span style={{ fontFamily: t.mono, fontSize: 10.5, color: t.fg3 }}>{fmtDist(distKm, useMetric)}</span>
-              </>
-            )}
-            <span style={{ color: t.fg4, margin: '0 2px' }}>·</span>
-            <span style={{ fontFamily: t.mono, fontSize: 10.5, color: t.fg3 }}>{timeAgo(obs.obsDt)}</span>
+            {/* Meta row */}
+            <div style={{ display: 'flex', alignItems: 'center', gap: 3, fontSize: 11.5, color: t.fg2, flexWrap: 'wrap' }}>
+              <MapPinIcon size={11} style={{ color: t.fg4, flexShrink: 0 }}/>
+              <span style={{ maxWidth: 150, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                {obs.locName}
+              </span>
+              {distKm !== undefined && (
+                <>
+                  <span style={{ color: t.fg4, margin: '0 2px' }}>·</span>
+                  <span style={{ fontFamily: t.mono, fontSize: 10.5, color: t.fg3 }}>{fmtDist(distKm, useMetric)}</span>
+                </>
+              )}
+              <span style={{ color: t.fg4, margin: '0 2px' }}>·</span>
+              <span style={{ fontFamily: t.mono, fontSize: 10.5, color: t.fg3 }}>{timeAgo(obs.obsDt)}</span>
+            </div>
           </div>
         </div>
-      </div>
-    </button>
+      </button>
+
+      {showChase && (
+        <div style={{ padding: '0 16px 12px 29px' }}>
+          <button
+            onClick={() => setExpanded(v => !v)}
+            style={{
+              display: 'inline-flex', alignItems: 'center', gap: 4,
+              background: 'transparent', border: 'none', cursor: 'pointer',
+              color: expanded ? tc.color : t.fg3, fontFamily: t.mono,
+              fontSize: 10.5, fontWeight: 600, letterSpacing: '0.03em', padding: 0,
+            }}>
+            {expanded ? '▾' : '▸'} Chase odds
+          </button>
+          {expanded && (
+            <ChasePanel speciesCode={obs.speciesCode} lat={obs.lat} lng={obs.lng} lightMode={lightMode} />
+          )}
+        </div>
+      )}
+    </div>
   );
 }
 

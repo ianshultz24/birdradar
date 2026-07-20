@@ -19,6 +19,7 @@ import { getTheme, tierTokens, tierLabel } from '@/lib/theme';
 import { RefreshCwIcon, CrosshairIcon, MapPinIcon, XIcon } from '@/components/Icons';
 import RadarOverlay from './RadarOverlay';
 import RadarPositionSync from './RadarPositionSync';
+import ChasePanel from './ChasePanel';
 
 // ─── Tier colors for DivIcon HTML strings (CSS vars can't be used in html strings) ───
 const TIER_COLORS_LIGHT = {
@@ -285,10 +286,12 @@ function ObsPopup({
   const [showAddForm, setShowAddForm] = useState(false);
   const [addDate, setAddDate] = useState('');
   const [addLoc, setAddLoc] = useState('');
+  const [showChase, setShowChase] = useState(false);
 
   const t = getTheme(lightMode);
   const tc = tierTokens(obs.tier, t);
   const label = tierLabel(obs.tier);
+  const chaseWorthwhile = obs.tier !== 'seen';
 
   function openForm() {
     setAddDate(obs.obsDt.split(' ')[0]);
@@ -344,6 +347,25 @@ function ObsPopup({
       {obs.reportCount && obs.reportCount > 1 && (
         <div style={{ fontSize: 11, color: t.fg3, fontFamily: t.mono, marginBottom: 12 }}>
           Reported {obs.reportCount}× this week here
+        </div>
+      )}
+
+      {/* Chase odds — is the bird still there? */}
+      {chaseWorthwhile && (
+        <div style={{ marginBottom: 10 }}>
+          <button
+            onClick={() => setShowChase(v => !v)}
+            style={{
+              display: 'inline-flex', alignItems: 'center', gap: 4,
+              background: 'transparent', border: 'none', cursor: 'pointer',
+              color: showChase ? tc.color : t.fg3, fontFamily: t.mono,
+              fontSize: 10.5, fontWeight: 600, letterSpacing: '0.03em', padding: 0,
+            }}>
+            {showChase ? '▾' : '▸'} Chase odds
+          </button>
+          {showChase && (
+            <ChasePanel speciesCode={obs.speciesCode} lat={obs.lat} lng={obs.lng} lightMode={lightMode} />
+          )}
         </div>
       )}
 
