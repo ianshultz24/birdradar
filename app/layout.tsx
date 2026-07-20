@@ -32,11 +32,17 @@ const ibmPlexMono = IBM_Plex_Mono({
 export const metadata: Metadata = {
   title: 'BirdRadar',
   description: 'Live birding map with eBird data and life list tracking',
+  appleWebApp: { capable: true, title: 'BirdRadar', statusBarStyle: 'default' },
+  icons: {
+    icon: '/favicon.ico',
+    apple: '/apple-touch-icon.png',
+  },
 };
 
 export const viewport: Viewport = {
   width: 'device-width',
   initialScale: 1,
+  themeColor: '#1B4332',
 };
 
 export default function RootLayout({

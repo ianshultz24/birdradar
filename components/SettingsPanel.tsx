@@ -1,8 +1,11 @@
 'use client';
 
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import type { AppSettings } from '@/lib/ebird';
 import { requestNotificationPermission } from '@/lib/notifications';
+import {
+  pushSupport, isSubscribed, enableAlerts, disableAlerts, type PushSupport,
+} from '@/lib/push-client';
 import { getTheme, type Theme } from '@/lib/theme';
 import { RefreshCwIcon, WifiIcon, WifiOffIcon } from '@/components/Icons';
 
@@ -12,9 +15,13 @@ interface Props {
   apiStatus: 'ok' | 'error' | 'loading';
   onRefreshNow: () => void;
   loading: boolean;
+  /** Where background push alerts watch — the current search center */
+  alertCenter: [number, number];
+  /** Life-list snapshot sent with the subscription so already-seen species don't alert */
+  lifeList: string[];
 }
 
-export default function SettingsPanel({ settings, onChange, apiStatus, onRefreshNow, loading }: Props) {
+export default function SettingsPanel({ settings, onChange, apiStatus, onRefreshNow, loading, alertCenter, lifeList }: Props) {
   const t = getTheme(settings.lightMode);
   const [refreshHov, setRefreshHov] = useState(false);
 
@@ -147,8 +154,17 @@ export default function SettingsPanel({ settings, onChange, apiStatus, onRefresh
           </Row>
         )}
         <div style={{ padding: '6px 20px 12px', fontSize: 11, color: t.fg3, fontFamily: t.mono }}>
-          Fires once per species per session
+          In-app: fires once per species per session
         </div>
+
+        <PushAlertsControl
+          t={t}
+          alertCenter={alertCenter}
+          radiusKm={settings.searchRadius}
+          lifeList={lifeList}
+          useMetric={settings.useMetric}
+          alertRadiusLabel={alertRadiusLabel}
+        />
       </Group>
 
       <Group label="Data Source" t={t}>
@@ -230,6 +246,109 @@ export default function SettingsPanel({ settings, onChange, apiStatus, onRefresh
           </LegendRow>
         </div>
       </Group>
+    </div>
+  );
+}
+
+function PushAlertsControl({ t, alertCenter, radiusKm, lifeList, useMetric, alertRadiusLabel }: {
+  t: Theme;
+  alertCenter: [number, number];
+  radiusKm: number;
+  lifeList: string[];
+  useMetric: boolean;
+  alertRadiusLabel: string;
+}) {
+  const [support, setSupport] = useState<PushSupport | null>(null);
+  const [subscribed, setSubscribed] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [hov, setHov] = useState(false);
+
+  useEffect(() => {
+    setSupport(pushSupport());
+    isSubscribed().then(setSubscribed).catch(() => setSubscribed(false));
+  }, []);
+
+  async function toggle() {
+    setError(null);
+    setBusy(true);
+    try {
+      if (subscribed) {
+        await disableAlerts();
+        setSubscribed(false);
+      } else {
+        await enableAlerts({
+          lat: alertCenter[0],
+          lng: alertCenter[1],
+          radiusKm: Math.min(Math.round(radiusKm), 50),
+          lifeCodes: lifeList,
+          useMetric,
+        });
+        setSubscribed(true);
+      }
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Something went wrong.');
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  // Hidden entirely where push can't work at all
+  if (support === null || support === 'unsupported') return null;
+
+  return (
+    <div style={{ padding: '4px 20px 14px' }}>
+      <div style={{
+        border: `1px solid ${t.line2}`, borderRadius: 10, padding: 14,
+        background: t.bg0,
+      }}>
+        <div style={{ fontSize: 13, fontWeight: 600, color: t.fg0, fontFamily: t.display, marginBottom: 4 }}>
+          Background lifer alerts
+        </div>
+        <div style={{ fontSize: 11.5, color: t.fg2, fontFamily: t.sans, lineHeight: 1.5, marginBottom: 12 }}>
+          Get a phone notification within minutes when a lifer is reported {alertRadiusLabel.replace('within', 'within')} of
+          this location — even with BirdRadar closed. Beats eBird&apos;s hourly email alerts.
+        </div>
+
+        {support === 'ios-needs-install' ? (
+          <div style={{
+            fontSize: 11.5, color: t.fg2, fontFamily: t.mono, lineHeight: 1.5,
+            background: t.bg2, border: `1px solid ${t.line2}`, borderRadius: 8, padding: '9px 11px',
+          }}>
+            On iPhone/iPad, add BirdRadar to your Home Screen first (Share → Add to Home Screen), then open it from there to enable push alerts.
+          </div>
+        ) : (
+          <>
+            <button
+              onClick={toggle}
+              disabled={busy}
+              onMouseEnter={() => setHov(true)}
+              onMouseLeave={() => setHov(false)}
+              style={{
+                width: '100%', padding: '9px 0', borderRadius: 8,
+                background: subscribed
+                  ? (hov ? 'rgba(239,68,68,0.10)' : 'rgba(239,68,68,0.06)')
+                  : (hov ? t.accentBorder : t.accentBg),
+                border: `1px solid ${subscribed ? 'rgba(239,68,68,0.3)' : t.accentBorder}`,
+                color: subscribed ? '#EF4444' : t.accent,
+                fontSize: 13, fontWeight: 600, cursor: busy ? 'default' : 'pointer',
+                fontFamily: t.sans, transition: 'all 0.15s',
+              }}>
+              {busy ? 'Working…' : subscribed ? 'Turn off background alerts' : 'Alert me at this location'}
+            </button>
+            {subscribed && (
+              <div style={{ marginTop: 8, fontSize: 11, color: t.lifer, fontFamily: t.mono, textAlign: 'center' }}>
+                ● Watching this location · life list synced
+              </div>
+            )}
+            {error && (
+              <div style={{ marginTop: 8, fontSize: 11, color: '#EF4444', fontFamily: t.mono, lineHeight: 1.5 }}>
+                {error}
+              </div>
+            )}
+          </>
+        )}
+      </div>
     </div>
   );
 }

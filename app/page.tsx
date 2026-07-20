@@ -14,6 +14,8 @@ import { mergeObservations, DEFAULT_SETTINGS, fmtDist } from '@/lib/ebird';
 import type { Observation, Hotspot, ClassifiedObservation, AppSettings, TargetSpecies } from '@/lib/ebird';
 import { classifyAll } from '@/lib/classify';
 import { migrateStaleCodesOnce } from '@/lib/taxonomy';
+import { haversineKm } from '@/lib/geo';
+import { syncLifeList } from '@/lib/push-client';
 import { sendBrowserNotification, playAlertBeep } from '@/lib/notifications';
 import {
   getLifeList,
@@ -38,16 +40,6 @@ const RATE_LIMIT_MS = 5 * 60 * 1000;
 /** Minimum gap between forced refreshes of the same location+radius (spam-click guard) */
 const MIN_FORCE_INTERVAL_MS = 15 * 1000;
 const LIFER_ALERT_RADIUS_KM = 16.09; // 10 miles
-
-function haversineKm(lat1: number, lng1: number, lat2: number, lng2: number): number {
-  const R = 6371;
-  const dLat = (lat2 - lat1) * Math.PI / 180;
-  const dLng = (lng2 - lng1) * Math.PI / 180;
-  const a =
-    Math.sin(dLat / 2) ** 2 +
-    Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) * Math.sin(dLng / 2) ** 2;
-  return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
-}
 
 // Dynamic import of map (no SSR — Leaflet requires browser DOM)
 const BirdMap = dynamic(() => import('@/components/Map'), {
@@ -132,6 +124,23 @@ export default function Home() {
     setLifeListMeta(getLifeListMeta());
     setSettings(getSettings());
 
+    // Deep link from a push notification: /?lat=..&lng=..&sp=.. — jump straight
+    // to the sighting and skip the GPS fix that would otherwise override it.
+    const params = new URLSearchParams(window.location.search);
+    const dlLat = parseFloat(params.get('lat') ?? '');
+    const dlLng = parseFloat(params.get('lng') ?? '');
+    const hasDeepLink =
+      !isNaN(dlLat) && !isNaN(dlLng) && dlLat >= -90 && dlLat <= 90 && dlLng >= -180 && dlLng <= 180;
+    if (hasDeepLink) {
+      setCenter([dlLat, dlLng]);
+      setFlyToTarget([dlLat, dlLng]);
+      const sp = params.get('sp');
+      if (sp && /^[a-zA-Z0-9]+$/.test(sp)) setFocusedSpecies({ code: sp, name: sp });
+      // Drop the query so a reload doesn't re-trigger the jump
+      window.history.replaceState(null, '', window.location.pathname);
+      return;
+    }
+
     if (typeof navigator !== 'undefined' && navigator.geolocation) {
       navigator.geolocation.getCurrentPosition(
         (pos) => {
@@ -149,6 +158,12 @@ export default function Home() {
       );
     }
   }, []);
+
+  // Keep the push-alert subscription's life-list snapshot current while the app
+  // is open. No-ops unless the user has enabled background alerts.
+  useEffect(() => {
+    syncLifeList(lifeList, settings.useMetric).catch(() => { /* offline / not subscribed */ });
+  }, [lifeList, settings.useMetric]);
 
   const fetchData = useCallback(async (force = false) => {
     const now = Date.now();

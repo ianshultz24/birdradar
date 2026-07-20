@@ -1,0 +1,30 @@
+# Push-alert watcher — pings the token-protected /api/alerts/run endpoint every
+# 5 minutes so lifer alerts fire minutes after a report, with the app closed.
+# Vercel Hobby cron only fires daily, so we schedule from GitHub Actions.
+#
+# Setup: add repository secrets APP_URL (e.g. https://birdradar.vercel.app) and
+# CRON_SECRET (must match the CRON_SECRET env var set in Vercel).
+name: Alert watcher
+
+on:
+  schedule:
+    - cron: '*/5 * * * *'
+  workflow_dispatch: {}
+
+# Don't stack runs if one is slow
+concurrency:
+  group: alert-watcher
+  cancel-in-progress: false
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Trigger watcher
+        run: |
+          code=$(curl -s -o /dev/null -w '%{http_code}' -X POST \
+            -H "Authorization: Bearer ${{ secrets.CRON_SECRET }}" \
+            "${{ secrets.APP_URL }}/api/alerts/run")
+          echo "watcher responded $code"
+          # Don't fail the workflow on transient 5xx — next tick retries
+          if [ "$code" = "401" ]; then echo "::error::Unauthorized — check CRON_SECRET"; exit 1; fi

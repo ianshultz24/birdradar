@@ -117,6 +117,8 @@ export default function Sidebar(props: Props) {
           apiStatus={apiStatus}
           onRefreshNow={onRefreshNow}
           loading={loading}
+          alertCenter={userCenter}
+          lifeList={lifeList}
         />
       )}
 
