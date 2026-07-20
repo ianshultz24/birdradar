@@ -9,6 +9,39 @@ import { getTheme } from '@/lib/theme';
 import { SearchIcon, UploadIcon, DownloadIcon, XIcon, CheckIcon } from '@/components/Icons';
 
 const MAX_IMPORT_FILE_BYTES = 5 * 1024 * 1024; // 5 MB — larger files freeze the tab in the synchronous parse
+const MAX_IMPORT_ENTRIES = 5_000; // caps localStorage growth from a hostile/corrupt backup file
+const MAX_META_FIELD_LEN = 200;
+
+function sanitizeImportCodes(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+  return value
+    .filter((c): c is string => typeof c === 'string' && c.length > 0 && c.length <= 20)
+    .slice(0, MAX_IMPORT_ENTRIES);
+}
+
+function sanitizeImportMeta(value: unknown): Record<string, SpeciesMeta> {
+  const out: Record<string, SpeciesMeta> = {};
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return out;
+  const str = (v: unknown) => (typeof v === 'string' ? v.slice(0, MAX_META_FIELD_LEN) : '');
+  let count = 0;
+  for (const [code, raw] of Object.entries(value as Record<string, unknown>)) {
+    if (count >= MAX_IMPORT_ENTRIES) break;
+    if (!code || code.length > 20 || !raw || typeof raw !== 'object' || Array.isArray(raw)) continue;
+    const m = raw as Record<string, unknown>;
+    out[code] = {
+      comName: str(m.comName),
+      sciName: str(m.sciName),
+      firstDate: str(m.firstDate),
+      firstLocation: str(m.firstLocation),
+      totalCount:
+        typeof m.totalCount === 'number' && Number.isFinite(m.totalCount) && m.totalCount > 0
+          ? Math.floor(m.totalCount)
+          : 1,
+    };
+    count++;
+  }
+  return out;
+}
 
 interface Props {
   lifeList: string[];
@@ -102,11 +135,9 @@ export default function LifeListPanel({
     try {
       const data: unknown = JSON.parse(text);
       const d = data as { lifeList?: unknown; yearList?: unknown; lifeListMeta?: unknown };
-      const lifeCodes = Array.isArray(d.lifeList) ? d.lifeList.filter((c): c is string => typeof c === 'string') : [];
-      const yearCodes = Array.isArray(d.yearList) ? d.yearList.filter((c): c is string => typeof c === 'string') : [];
-      const meta = (d.lifeListMeta && typeof d.lifeListMeta === 'object' && !Array.isArray(d.lifeListMeta))
-        ? d.lifeListMeta as Record<string, SpeciesMeta>
-        : {};
+      const lifeCodes = sanitizeImportCodes(d.lifeList);
+      const yearCodes = sanitizeImportCodes(d.yearList);
+      const meta = sanitizeImportMeta(d.lifeListMeta);
       if (lifeCodes.length === 0 && yearCodes.length === 0) {
         showToast('No species found in JSON file.');
         return;
