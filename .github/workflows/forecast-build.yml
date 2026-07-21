@@ -1,0 +1,27 @@
+# Nightly arrival-forecast refresh — rebuilds the "Arriving Soon" seasonal
+# curves for regions with recent traffic. Historic data is immutable, so this
+# only re-derives the forward window as the calendar moves; runs once a day.
+#
+# Setup: reuses the APP_URL and CRON_SECRET repository secrets.
+name: Forecast build
+
+on:
+  schedule:
+    - cron: '17 8 * * *' # 08:17 UTC daily (off the hour to avoid runner contention)
+  workflow_dispatch: {}
+
+concurrency:
+  group: forecast-build
+  cancel-in-progress: false
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Trigger forecast build
+        run: |
+          code=$(curl -s -o /dev/null -w '%{http_code}' -X POST \
+            -H "Authorization: Bearer ${{ secrets.CRON_SECRET }}" \
+            "${{ secrets.APP_URL }}/api/forecast/build")
+          echo "forecast build responded $code"
+          if [ "$code" = "401" ]; then echo "::error::Unauthorized — check CRON_SECRET"; exit 1; fi

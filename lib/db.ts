@@ -36,6 +36,13 @@ export async function getDb(): Promise<NeonQueryFunction<false, false> | null> {
       created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
       updated_at  TIMESTAMPTZ NOT NULL DEFAULT now()
     )`;
+    // Arrival forecast: derived from immutable historic data, but the forward
+    // window shifts, so it's refreshed periodically (built_at gates staleness).
+    await sql`CREATE TABLE IF NOT EXISTS forecast_cache (
+      region_code TEXT PRIMARY KEY,
+      data        JSONB NOT NULL,
+      built_at    TIMESTAMPTZ NOT NULL DEFAULT now()
+    )`;
     schemaReady = true;
   }
   return sql;

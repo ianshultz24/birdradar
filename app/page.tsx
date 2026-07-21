@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect, useCallback, useRef } from 'react';
+import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import dynamic from 'next/dynamic';
 
 import Sidebar from '@/components/Sidebar';
@@ -16,6 +16,7 @@ import { classifyAll } from '@/lib/classify';
 import { migrateStaleCodesOnce } from '@/lib/taxonomy';
 import { haversineKm } from '@/lib/geo';
 import { syncLifeList } from '@/lib/push-client';
+import { selectArriving, type RegionForecast, type ArrivingSpecies } from '@/lib/forecast';
 import { sendBrowserNotification, playAlertBeep } from '@/lib/notifications';
 import {
   getLifeList,
@@ -73,6 +74,8 @@ export default function Home() {
   const [observations, setObservations] = useState<ClassifiedObservation[]>([]);
   const [hotspots, setHotspots] = useState<Hotspot[]>([]);
   const [targetSpecies, setTargetSpecies] = useState<TargetSpecies[]>([]);
+  const [activeRegion, setActiveRegion] = useState<string | null>(null);
+  const [regionForecast, setRegionForecast] = useState<RegionForecast | null>(null);
   const [hotspotPanel, setHotspotPanel] = useState<Hotspot | null>(null);
   const [settings, setSettings] = useState<AppSettings>(DEFAULT_SETTINGS);
   const [flyToTarget, setFlyToTarget] = useState<[number, number] | null>(null);
@@ -108,6 +111,8 @@ export default function Home() {
   const abortRef = useRef<AbortController | null>(null);
   /** Regional species lists change ~never — cache per region for the session */
   const sppListCacheRef = useRef<Map<string, string[]>>(new Map());
+  /** Arrival forecast per region — cache for the session */
+  const forecastCacheRef = useRef<Map<string, RegionForecast>>(new Map());
 
   // Keep refs in sync
   settingsRef.current = settings;
@@ -164,6 +169,31 @@ export default function Home() {
   useEffect(() => {
     syncLifeList(lifeList, settings.useMetric).catch(() => { /* offline / not subscribed */ });
   }, [lifeList, settings.useMetric]);
+
+  // Fetch the arrival forecast for the current region (session-cached). The
+  // first request for a cold region builds it server-side; failures are silent
+  // (the "Arriving Soon" section just stays empty).
+  useEffect(() => {
+    if (!activeRegion) {
+      setRegionForecast(null);
+      return;
+    }
+    const cached = forecastCacheRef.current.get(activeRegion);
+    if (cached) {
+      setRegionForecast(cached);
+      return;
+    }
+    let cancelled = false;
+    fetch(`/api/forecast?regionCode=${encodeURIComponent(activeRegion)}`)
+      .then((r) => (r.ok ? r.json() : null))
+      .then((data: RegionForecast | null) => {
+        if (cancelled || !data || !Array.isArray(data.entries)) return;
+        forecastCacheRef.current.set(activeRegion, data);
+        setRegionForecast(data);
+      })
+      .catch(() => { /* silent — forecast is a bonus, not core */ });
+    return () => { cancelled = true; };
+  }, [activeRegion]);
 
   const fetchData = useCallback(async (force = false) => {
     const now = Date.now();
@@ -250,6 +280,9 @@ export default function Home() {
       const regionCode = (Array.isArray(hotspotsData) && hotspotsData[0]?.subnational1Code)
         ? hotspotsData[0].subnational1Code
         : null;
+
+      // Drives the "Arriving Soon" temporal forecast (fetched in its own effect)
+      setActiveRegion(regionCode);
 
       if (!regionCode) {
         setTargetSpecies([]);
@@ -450,6 +483,15 @@ export default function Home() {
     return () => clearTimeout(timer);
   }, []);
 
+  // Species arriving in the region soon that aren't being seen locally yet —
+  // lifers first. Recomputed from the cached forecast; no extra fetches.
+  const arrivingSpecies = useMemo<ArrivingSpecies[]>(() => {
+    if (!regionForecast) return [];
+    const currentCodes = new Set(observations.map((o) => o.speciesCode));
+    const activeList = settings.yearListActive ? yearList : lifeList;
+    return selectArriving(regionForecast, currentCodes, new Set(activeList));
+  }, [regionForecast, observations, lifeList, yearList, settings.yearListActive]);
+
   // ─── Handlers ─────────────────────────────────────────────────────────────
 
   function handleAddToLifeList(code: string, name: string, sciName?: string, date?: string, location?: string) {
@@ -581,6 +623,7 @@ export default function Home() {
         yearList={yearList}
         lifeListMeta={lifeListMeta}
         targetSpecies={targetSpecies}
+        arrivingSpecies={arrivingSpecies}
         hotspotPanel={hotspotPanel}
         settings={settings}
         apiStatus={apiStatus}

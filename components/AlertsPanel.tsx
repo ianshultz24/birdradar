@@ -6,14 +6,26 @@ import { timeAgo, fmtDist, parseObsDt } from '@/lib/ebird';
 import { getTheme, tierTokens, tierLabel, type Theme } from '@/lib/theme';
 import { fetchChaseStats } from '@/lib/chase';
 import { haversineKm } from '@/lib/geo';
+import type { ArrivingSpecies } from '@/lib/forecast';
 import ChasePanel from '@/components/ChasePanel';
 import { SearchIcon, XIcon, MapPinIcon, TargetIcon } from '@/components/Icons';
 
 type SortMode = 'recent' | 'closest' | 'chase';
 
+function formatArrival(dateStr: string): string {
+  const parts = dateStr.split('-');
+  if (parts.length !== 3) return dateStr;
+  const months = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+  const m = parseInt(parts[1], 10) - 1;
+  const d = parseInt(parts[2], 10);
+  if (isNaN(m) || isNaN(d)) return dateStr;
+  return `${months[m]} ${d}`;
+}
+
 interface Props {
   observations: ClassifiedObservation[];
   targetSpecies: TargetSpecies[];
+  arrivingSpecies: ArrivingSpecies[];
   yearListActive: boolean;
   lightMode: boolean;
   useMetric?: boolean;
@@ -24,7 +36,7 @@ interface Props {
 }
 
 export default function AlertsPanel({
-  observations, targetSpecies, yearListActive, lightMode, useMetric = true,
+  observations, targetSpecies, arrivingSpecies, yearListActive, lightMode, useMetric = true,
   userCenter, focusedSpecies, onFlyTo, onFocusSpecies,
 }: Props) {
   const [sortBy, setSortBy] = useState<SortMode>('recent');
@@ -265,6 +277,25 @@ export default function AlertsPanel({
             </>
           )}
 
+          {arrivingSpecies.length > 0 && (
+            <>
+              <SectionHeader title="Arriving Soon" count={arrivingSpecies.length} t={t} dotColor={t.target}/>
+              <div style={{ padding: '8px 16px 4px', fontSize: 10.5, color: t.fg3, fontFamily: t.mono, lineHeight: 1.5 }}>
+                Expected in your region within weeks — not being seen locally yet.{' '}
+                <a
+                  href="https://birdcast.info/migration-tools/live-bird-migration-maps/"
+                  target="_blank" rel="noopener noreferrer"
+                  style={{ color: t.target, textDecoration: 'underline', textUnderlineOffset: 2 }}
+                >
+                  Migration tonight (BirdCast) →
+                </a>
+              </div>
+              {arrivingSpecies.map(sp => (
+                <ArrivingCard key={sp.speciesCode} sp={sp} t={t} />
+              ))}
+            </>
+          )}
+
           <SectionHeader title={liferSectionTitle} count={liferAll.length} t={t} dotColor={t.lifer}/>
           {liferAll.length === 0
             ? <EmptyState text={yearListActive ? 'No new species this year nearby' : 'No lifers nearby'} t={t}/>
@@ -492,5 +523,47 @@ function TargetCard({ sp, t, isFocused, isDimmed, onFlyTo, onFocusSpecies }: {
         </span>
       </div>
     </button>
+  );
+}
+
+// ─── Arriving-soon card (temporal forecast) ──────────────────────────────────
+
+function ArrivingCard({ sp, t }: { sp: ArrivingSpecies; t: Theme }) {
+  // frequency → a coarse confidence read
+  const confidence = sp.frequency >= 0.75 ? 'Reliable' : sp.frequency >= 0.5 ? 'Likely' : 'Possible';
+
+  return (
+    <div style={{
+      display: 'block', width: '100%', textAlign: 'left',
+      borderBottom: `1px solid ${t.line1}`, padding: '12px 16px',
+      fontFamily: t.sans,
+    }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 7 }}>
+            <span style={{ fontSize: 13, fontWeight: 600, color: t.fg0, fontFamily: t.display,
+              overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+              {sp.comName}
+            </span>
+            {sp.isLifer && (
+              <span style={{
+                fontSize: 9, fontWeight: 700, fontFamily: t.mono, flexShrink: 0,
+                color: t.lifer, background: t.liferBg, border: `1px solid ${t.liferBorder}`,
+                borderRadius: 4, padding: '1px 5px', letterSpacing: '0.03em',
+              }}>LIFER</span>
+            )}
+          </div>
+          <div style={{ fontSize: 11.5, color: t.fg2, fontStyle: 'italic' }}>{sp.sciName}</div>
+        </div>
+        <div style={{ textAlign: 'right', flexShrink: 0 }}>
+          <div style={{ fontSize: 11, fontFamily: t.mono, color: t.target, fontWeight: 600 }}>
+            ~{formatArrival(sp.arrivalDate)}
+          </div>
+          <div style={{ fontSize: 9.5, fontFamily: t.mono, color: t.fg3, marginTop: 1 }}>
+            {confidence}
+          </div>
+        </div>
+      </div>
+    </div>
   );
 }

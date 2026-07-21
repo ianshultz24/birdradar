@@ -3,6 +3,7 @@
 import { useState } from 'react';
 import type { ClassifiedObservation, AppSettings, Hotspot, TargetSpecies } from '@/lib/ebird';
 import type { SpeciesMeta } from '@/lib/lifelist';
+import type { ArrivingSpecies } from '@/lib/forecast';
 import { getTheme } from '@/lib/theme';
 import { BellIcon, BirdIcon, SettingsIcon } from '@/components/Icons';
 import AlertsPanel from './AlertsPanel';
@@ -23,6 +24,7 @@ interface Props {
   yearList: string[];
   lifeListMeta: Record<string, SpeciesMeta>;
   targetSpecies: TargetSpecies[];
+  arrivingSpecies: ArrivingSpecies[];
   hotspotPanel: Hotspot | null;
   settings: AppSettings;
   apiStatus: 'ok' | 'error' | 'loading';
@@ -52,7 +54,7 @@ const TABS: { id: Tab; label: string; Icon: React.FC<{ size?: number }> }[] = [
 export default function Sidebar(props: Props) {
   const {
     activeTab, onTabChange, isMobile, drawerOpen,
-    observations, lifeList, yearList, lifeListMeta, targetSpecies,
+    observations, lifeList, yearList, lifeListMeta, targetSpecies, arrivingSpecies,
     hotspotPanel, settings, apiStatus, loading, userCenter,
     focusedSpecies, onFlyTo, onFocusSpecies,
     onAddToLifeList, onRemoveFromLifeList, onAddToYearList, onRemoveFromYearList,
@@ -83,6 +85,7 @@ export default function Sidebar(props: Props) {
         <AlertsPanel
           observations={observations}
           targetSpecies={targetSpecies}
+          arrivingSpecies={arrivingSpecies}
           yearListActive={settings.yearListActive}
           lightMode={lm}
           useMetric={settings.useMetric}
