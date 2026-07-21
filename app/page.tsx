@@ -16,6 +16,7 @@ import { classifyAll } from '@/lib/classify';
 import { migrateStaleCodesOnce } from '@/lib/taxonomy';
 import { haversineKm } from '@/lib/geo';
 import { syncLifeList } from '@/lib/push-client';
+import { pushSync, type SyncPayload } from '@/lib/sync-client';
 import { selectArriving, type RegionForecast, type ArrivingSpecies } from '@/lib/forecast';
 import { sendBrowserNotification, playAlertBeep } from '@/lib/notifications';
 import {
@@ -169,6 +170,17 @@ export default function Home() {
   useEffect(() => {
     syncLifeList(lifeList, settings.useMetric).catch(() => { /* offline / not subscribed */ });
   }, [lifeList, settings.useMetric]);
+
+  // Push list changes to the linked sync code (no-op unless this device is
+  // linked). Skips the initial empty state before localStorage hydrates.
+  const syncHydratedRef = useRef(false);
+  useEffect(() => {
+    if (!syncHydratedRef.current) {
+      syncHydratedRef.current = true;
+      return;
+    }
+    pushSync({ lifeList, yearList, meta: lifeListMeta }).catch(() => { /* offline / not linked */ });
+  }, [lifeList, yearList, lifeListMeta]);
 
   // Fetch the arrival forecast for the current region (session-cached). The
   // first request for a cold region builds it server-side; failures are silent
@@ -570,6 +582,12 @@ export default function Home() {
 
   type Tab = 'alerts' | 'lifelist' | 'settings';
 
+  function handleSyncMerge(payload: SyncPayload) {
+    // Union the pulled lists into the local ones (non-destructive), reusing the
+    // same merge path as file import
+    handleBulkImport(payload.lifeList ?? [], payload.yearList ?? [], payload.meta ?? {});
+  }
+
   function handleTabChange(tab: Tab) {
     if (isMobile) {
       if (tab === activeTab && drawerOpen) {
@@ -642,6 +660,7 @@ export default function Home() {
         onSettingsChange={handleSettingsChange}
         onRefreshNow={() => fetchData(true)}
         onCloseHotspotPanel={() => setHotspotPanel(null)}
+        onSyncMerge={handleSyncMerge}
       />
 
       <div style={{ flex: 1, position: 'relative', overflow: 'hidden' }}>

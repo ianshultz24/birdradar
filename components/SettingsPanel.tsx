@@ -2,10 +2,14 @@
 
 import { useEffect, useState } from 'react';
 import type { AppSettings } from '@/lib/ebird';
+import type { SpeciesMeta } from '@/lib/lifelist';
 import { requestNotificationPermission } from '@/lib/notifications';
 import {
   pushSupport, isSubscribed, enableAlerts, disableAlerts, type PushSupport,
 } from '@/lib/push-client';
+import {
+  getSyncCode, createSyncCode, linkSyncCode, clearSyncCode, type SyncPayload,
+} from '@/lib/sync-client';
 import { getTheme, type Theme } from '@/lib/theme';
 import { RefreshCwIcon, WifiIcon, WifiOffIcon } from '@/components/Icons';
 
@@ -19,9 +23,16 @@ interface Props {
   alertCenter: [number, number];
   /** Life-list snapshot sent with the subscription so already-seen species don't alert */
   lifeList: string[];
+  yearList: string[];
+  lifeListMeta: Record<string, SpeciesMeta>;
+  /** Merge lists pulled from a sync code into the local lists */
+  onSyncMerge: (payload: SyncPayload) => void;
 }
 
-export default function SettingsPanel({ settings, onChange, apiStatus, onRefreshNow, loading, alertCenter, lifeList }: Props) {
+export default function SettingsPanel({
+  settings, onChange, apiStatus, onRefreshNow, loading, alertCenter,
+  lifeList, yearList, lifeListMeta, onSyncMerge,
+}: Props) {
   const t = getTheme(settings.lightMode);
   const [refreshHov, setRefreshHov] = useState(false);
 
@@ -164,6 +175,16 @@ export default function SettingsPanel({ settings, onChange, apiStatus, onRefresh
           lifeList={lifeList}
           useMetric={settings.useMetric}
           alertRadiusLabel={alertRadiusLabel}
+        />
+      </Group>
+
+      <Group label="Sync Across Devices" t={t}>
+        <SyncControl
+          t={t}
+          lifeList={lifeList}
+          yearList={yearList}
+          lifeListMeta={lifeListMeta}
+          onSyncMerge={onSyncMerge}
         />
       </Group>
 
@@ -349,6 +370,128 @@ function PushAlertsControl({ t, alertCenter, radiusKm, lifeList, useMetric, aler
           </>
         )}
       </div>
+    </div>
+  );
+}
+
+function SyncControl({ t, lifeList, yearList, lifeListMeta, onSyncMerge }: {
+  t: Theme;
+  lifeList: string[];
+  yearList: string[];
+  lifeListMeta: Record<string, SpeciesMeta>;
+  onSyncMerge: (payload: SyncPayload) => void;
+}) {
+  const [code, setCode] = useState<string | null>(null);
+  const [input, setInput] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [msg, setMsg] = useState<string | null>(null);
+  const [err, setErr] = useState<string | null>(null);
+
+  useEffect(() => { setCode(getSyncCode()); }, []);
+
+  const payload = (): SyncPayload => ({ lifeList, yearList, meta: lifeListMeta });
+
+  async function create() {
+    setErr(null); setMsg(null); setBusy(true);
+    try {
+      const c = await createSyncCode(payload());
+      setCode(c);
+      setMsg('Sync code created. Enter it on another device to link.');
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : 'Failed.');
+    } finally { setBusy(false); }
+  }
+
+  async function link() {
+    setErr(null); setMsg(null); setBusy(true);
+    try {
+      const data = await linkSyncCode(input);
+      onSyncMerge(data);
+      setCode(getSyncCode());
+      setInput('');
+      setMsg(`Linked — merged ${data.lifeList?.length ?? 0} life species.`);
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : 'Failed.');
+    } finally { setBusy(false); }
+  }
+
+  function unlink() {
+    clearSyncCode();
+    setCode(null);
+    setMsg('Unlinked this device. Your lists stay on it.');
+  }
+
+  const formatted = code ? `${code.slice(0, 5)}-${code.slice(5)}` : '';
+
+  return (
+    <div style={{ padding: '10px 20px 14px' }}>
+      <div style={{ fontSize: 11.5, color: t.fg2, fontFamily: t.sans, lineHeight: 1.5, marginBottom: 12 }}>
+        Your lists live on this device. Create a sync code to copy them to another device — no account, just a code.
+      </div>
+
+      {code ? (
+        <div style={{ border: `1px solid ${t.accentBorder}`, borderRadius: 10, padding: 12, background: t.accentBg }}>
+          <div style={{ fontSize: 10, fontFamily: t.mono, color: t.fg3, letterSpacing: '0.06em', marginBottom: 4 }}>
+            YOUR SYNC CODE
+          </div>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+            <span style={{ fontSize: 18, fontWeight: 700, fontFamily: t.mono, color: t.accent, letterSpacing: '0.08em', flex: 1 }}>
+              {formatted}
+            </span>
+            <button
+              onClick={() => { navigator.clipboard?.writeText(code).then(() => setMsg('Copied.'), () => {}); }}
+              style={{
+                padding: '5px 10px', background: t.bg1, border: `1px solid ${t.line2}`,
+                borderRadius: 6, color: t.fg1, fontSize: 11, fontWeight: 600, cursor: 'pointer', fontFamily: t.sans,
+              }}>Copy</button>
+          </div>
+          <button
+            onClick={unlink}
+            style={{
+              marginTop: 10, width: '100%', padding: '7px 0',
+              background: 'transparent', border: `1px solid ${t.line2}`, borderRadius: 7,
+              color: t.fg2, fontSize: 12, cursor: 'pointer', fontFamily: t.sans,
+            }}>Unlink this device</button>
+        </div>
+      ) : (
+        <>
+          <button
+            onClick={create}
+            disabled={busy}
+            style={{
+              width: '100%', padding: '9px 0', borderRadius: 8, marginBottom: 10,
+              background: busy ? t.bg2 : t.accentBg, border: `1px solid ${t.accentBorder}`,
+              color: t.accent, fontSize: 13, fontWeight: 600, cursor: busy ? 'default' : 'pointer', fontFamily: t.sans,
+            }}>
+            {busy ? 'Working…' : 'Create a sync code'}
+          </button>
+          <div style={{ display: 'flex', gap: 6 }}>
+            <input
+              value={input}
+              onChange={(e) => setInput(e.target.value)}
+              placeholder="Enter a code"
+              style={{
+                flex: 1, padding: '8px 10px', fontSize: 13, fontFamily: t.mono,
+                background: t.bg2, border: `1px solid ${t.line2}`, borderRadius: 8,
+                outline: 'none', color: t.fg0, boxSizing: 'border-box', letterSpacing: '0.06em',
+              }}/>
+            <button
+              onClick={link}
+              disabled={busy || input.trim().length < 10}
+              style={{
+                padding: '8px 14px', borderRadius: 8,
+                background: input.trim().length >= 10 && !busy ? t.accentBg : t.bg2,
+                border: `1px solid ${t.line2}`,
+                color: input.trim().length >= 10 && !busy ? t.accent : t.fg3,
+                fontSize: 13, fontWeight: 600, cursor: input.trim().length >= 10 && !busy ? 'pointer' : 'default',
+                fontFamily: t.sans, whiteSpace: 'nowrap',
+              }}>Link</button>
+          </div>
+        </>
+      )}
+
+      {msg && <div style={{ marginTop: 10, fontSize: 11, color: t.lifer, fontFamily: t.mono, lineHeight: 1.5 }}>{msg}</div>}
+      {err && <div style={{ marginTop: 10, fontSize: 11, color: '#EF4444', fontFamily: t.mono, lineHeight: 1.5 }}>{err}</div>}
     </div>
   );
 }

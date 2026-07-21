@@ -43,6 +43,14 @@ export async function getDb(): Promise<NeonQueryFunction<false, false> | null> {
       data        JSONB NOT NULL,
       built_at    TIMESTAMPTZ NOT NULL DEFAULT now()
     )`;
+    // Anonymous cross-device sync — id is sha256(code), so the code never
+    // touches the DB.
+    await sql`CREATE TABLE IF NOT EXISTS sync_data (
+      id         TEXT PRIMARY KEY,
+      data       JSONB NOT NULL,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    )`;
     schemaReady = true;
   }
   return sql;

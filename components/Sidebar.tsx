@@ -4,6 +4,7 @@ import { useState } from 'react';
 import type { ClassifiedObservation, AppSettings, Hotspot, TargetSpecies } from '@/lib/ebird';
 import type { SpeciesMeta } from '@/lib/lifelist';
 import type { ArrivingSpecies } from '@/lib/forecast';
+import type { SyncPayload } from '@/lib/sync-client';
 import { getTheme } from '@/lib/theme';
 import { BellIcon, BirdIcon, SettingsIcon } from '@/components/Icons';
 import AlertsPanel from './AlertsPanel';
@@ -43,6 +44,7 @@ interface Props {
   onSettingsChange: (s: AppSettings) => void;
   onRefreshNow: () => void;
   onCloseHotspotPanel: () => void;
+  onSyncMerge: (payload: SyncPayload) => void;
 }
 
 const TABS: { id: Tab; label: string; Icon: React.FC<{ size?: number }> }[] = [
@@ -59,7 +61,7 @@ export default function Sidebar(props: Props) {
     focusedSpecies, onFlyTo, onFocusSpecies,
     onAddToLifeList, onRemoveFromLifeList, onAddToYearList, onRemoveFromYearList,
     onBulkImport, onClearLifeList, onClearYearList, onSettingsChange,
-    onRefreshNow, onCloseHotspotPanel,
+    onRefreshNow, onCloseHotspotPanel, onSyncMerge,
   } = props;
 
   const [hoveredTab, setHoveredTab] = useState<Tab | null>(null);
@@ -122,6 +124,9 @@ export default function Sidebar(props: Props) {
           loading={loading}
           alertCenter={userCenter}
           lifeList={lifeList}
+          yearList={yearList}
+          lifeListMeta={lifeListMeta}
+          onSyncMerge={onSyncMerge}
         />
       )}
 
