@@ -286,7 +286,6 @@ function ObsPopup({
   const [showAddForm, setShowAddForm] = useState(false);
   const [addDate, setAddDate] = useState('');
   const [addLoc, setAddLoc] = useState('');
-  const [showChase, setShowChase] = useState(false);
 
   const t = getTheme(lightMode);
   const tc = tierTokens(obs.tier, t);
@@ -313,7 +312,7 @@ function ObsPopup({
   };
 
   return (
-    <div style={{ fontFamily: t.sans, minWidth: 210, maxWidth: 270 }}>
+    <div style={{ fontFamily: t.sans, minWidth: 240, maxWidth: 300 }}>
       {/* Tier badge */}
       <div style={{ marginBottom: 7 }}>
         <span style={{
@@ -332,6 +331,19 @@ function ObsPopup({
         {obs.sciName}
       </div>
 
+      {/* Sighting odds — will the bird still be there? (prominent, always shown) */}
+      {chaseWorthwhile && (
+        <div style={{ marginBottom: 12 }}>
+          <div style={{
+            fontSize: 9.5, fontWeight: 700, fontFamily: t.mono, color: t.fg3,
+            letterSpacing: '0.06em',
+          }}>
+            SIGHTING ODDS
+          </div>
+          <ChasePanel speciesCode={obs.speciesCode} lat={obs.lat} lng={obs.lng} lightMode={lightMode} />
+        </div>
+      )}
+
       {/* Location + meta */}
       <div style={{ fontSize: 12, color: t.fg2, marginBottom: 4, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
         {obs.locName}
@@ -347,25 +359,6 @@ function ObsPopup({
       {obs.reportCount && obs.reportCount > 1 && (
         <div style={{ fontSize: 11, color: t.fg3, fontFamily: t.mono, marginBottom: 12 }}>
           Reported {obs.reportCount}× this week here
-        </div>
-      )}
-
-      {/* Chase odds — is the bird still there? */}
-      {chaseWorthwhile && (
-        <div style={{ marginBottom: 10 }}>
-          <button
-            onClick={() => setShowChase(v => !v)}
-            style={{
-              display: 'inline-flex', alignItems: 'center', gap: 4,
-              background: 'transparent', border: 'none', cursor: 'pointer',
-              color: showChase ? tc.color : t.fg3, fontFamily: t.mono,
-              fontSize: 10.5, fontWeight: 600, letterSpacing: '0.03em', padding: 0,
-            }}>
-            {showChase ? '▾' : '▸'} Chase odds
-          </button>
-          {showChase && (
-            <ChasePanel speciesCode={obs.speciesCode} lat={obs.lat} lng={obs.lng} lightMode={lightMode} />
-          )}
         </div>
       )}
 
@@ -484,6 +477,89 @@ function MultiObsPopup({
         lightMode={lightMode}
       />
     </div>
+  );
+}
+
+// ─── Hover-to-open marker ─────────────────────────────────────────────────────
+// On hover-capable pointers, hovering a bird pin opens its card (with a short
+// intent delay so skimming across pins doesn't fire fetches), and the card stays
+// open long enough to move onto it and click. Touch devices are unaffected — the
+// default tap-to-open behavior remains.
+const canHover =
+  typeof window !== 'undefined' &&
+  typeof window.matchMedia === 'function' &&
+  window.matchMedia('(hover: hover) and (pointer: fine)').matches;
+
+function HoverMarker({ position, icon, children }: {
+  position: [number, number];
+  icon: L.DivIcon;
+  children: React.ReactNode;
+}) {
+  const markerRef = useRef<L.Marker>(null);
+  const openTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const closeTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const popupElRef = useRef<HTMLElement | null>(null);
+
+  const cancelOpen = useCallback(() => {
+    if (openTimer.current) { clearTimeout(openTimer.current); openTimer.current = null; }
+  }, []);
+  const cancelClose = useCallback(() => {
+    if (closeTimer.current) { clearTimeout(closeTimer.current); closeTimer.current = null; }
+  }, []);
+  const scheduleClose = useCallback(() => {
+    cancelClose();
+    closeTimer.current = setTimeout(() => {
+      closeTimer.current = null;
+      markerRef.current?.closePopup();
+    }, 260);
+  }, [cancelClose]);
+
+  // Stable references so the popup DOM listeners we add on open are the exact
+  // ones we remove on close.
+  const onPopupEnter = useCallback(() => cancelClose(), [cancelClose]);
+  const onPopupLeave = useCallback(() => scheduleClose(), [scheduleClose]);
+
+  useEffect(() => () => { cancelOpen(); cancelClose(); }, [cancelOpen, cancelClose]);
+
+  const eventHandlers = useMemo(() => {
+    if (!canHover) return undefined;
+    return {
+      mouseover: () => {
+        cancelClose();
+        if (openTimer.current) return;
+        openTimer.current = setTimeout(() => {
+          openTimer.current = null;
+          markerRef.current?.openPopup();
+        }, 130);
+      },
+      mouseout: () => {
+        cancelOpen();
+        scheduleClose();
+      },
+      popupopen: (e: L.PopupEvent) => {
+        const el = e.popup.getElement() as HTMLElement | null;
+        if (!el) return;
+        popupElRef.current = el;
+        el.addEventListener('mouseenter', onPopupEnter);
+        el.addEventListener('mouseleave', onPopupLeave);
+      },
+      popupclose: () => {
+        const el = popupElRef.current;
+        if (el) {
+          el.removeEventListener('mouseenter', onPopupEnter);
+          el.removeEventListener('mouseleave', onPopupLeave);
+          popupElRef.current = null;
+        }
+        cancelOpen();
+        cancelClose();
+      },
+    };
+  }, [cancelClose, cancelOpen, scheduleClose, onPopupEnter, onPopupLeave]);
+
+  return (
+    <Marker ref={markerRef} position={position} icon={icon} eventHandlers={eventHandlers}>
+      <Popup className="bird-popup">{children}</Popup>
+    </Marker>
   );
 }
 
@@ -717,20 +793,18 @@ export default function BirdMap({
           const focusOpacity = focusedSpecies && !isFocused ? 0.18 : 1;
           const opacity = baseOpacity * focusOpacity;
           return (
-            <Marker
+            <HoverMarker
               key={locKey}
               position={[repObs.lat, repObs.lng]}
               icon={birdPinIcon(repObs.tier, settings.liferPulse, opacity, isFocused, settings.lightMode)}
             >
-              <Popup className="bird-popup">
-                <MultiObsPopup
-                  observations={group}
-                  onAddToLifeList={onAddToLifeList}
-                  lifeSet={lifeSet}
-                  lightMode={lightMode}
-                />
-              </Popup>
-            </Marker>
+              <MultiObsPopup
+                observations={group}
+                onAddToLifeList={onAddToLifeList}
+                lifeSet={lifeSet}
+                lightMode={lightMode}
+              />
+            </HoverMarker>
           );
         })}
 

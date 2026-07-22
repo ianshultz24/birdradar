@@ -1,8 +1,9 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { fetchChaseStats, type ChaseStats } from '@/lib/chase';
-import { getTheme, type Theme } from '@/lib/theme';
+import { getTheme, oddsLabel, oddsColor } from '@/lib/theme';
+import { ClockIcon } from '@/components/Icons';
 
 interface Props {
   speciesCode: string;
@@ -12,106 +13,149 @@ interface Props {
   /** eBird API max is 50; 25 km around the sighting captures its stakeout */
   distKm?: number;
   lightMode: boolean;
+  /** Defer the fetch until scrolled into view — for list contexts (sidebar) where
+   *  many panels mount at once and firing every fetch would trip the rate limit.
+   *  The map popup shows one card at a time and leaves this off (fetch eagerly). */
+  lazy?: boolean;
 }
 
 /**
- * On-demand chaseability readout for one species near one sighting. Fetches the
- * species' 30-day history (cached, ~1 call per interaction) and renders a
- * compact "will it still be there?" verdict — the thing eBird never answers.
+ * Sighting-odds readout for one species near one sighting. Fetches the species'
+ * 30-day history (cached, ~1 call per interaction) and renders a prominent,
+ * plain-language answer to "will it still be there?" — a likelihood, when it's
+ * usually seen, and how often it's been reported lately.
  */
-export default function ChasePanel({ speciesCode, lat, lng, distKm = 25, lightMode }: Props) {
+export default function ChasePanel({ speciesCode, lat, lng, distKm = 25, lightMode, lazy = false }: Props) {
   const [stats, setStats] = useState<ChaseStats | null>(null);
-  // Starts 'loading'; the panel mounts fresh each time it's expanded, so props
-  // are stable for its lifetime and no in-effect reset to 'loading' is needed.
   const [state, setState] = useState<'loading' | 'ok' | 'error'>('loading');
+  const [inView, setInView] = useState(() => !lazy || typeof IntersectionObserver === 'undefined');
+  const rootRef = useRef<HTMLDivElement>(null);
   const t = getTheme(lightMode);
 
+  // Lazy panels wait until near the viewport before fetching.
   useEffect(() => {
+    if (inView) return;
+    const el = rootRef.current;
+    if (!el) return;
+    const io = new IntersectionObserver((entries) => {
+      if (entries.some((e) => e.isIntersecting)) { setInView(true); io.disconnect(); }
+    }, { rootMargin: '150px' });
+    io.observe(el);
+    return () => io.disconnect();
+  }, [inView]);
+
+  useEffect(() => {
+    if (!inView) return;
     let live = true;
     fetchChaseStats(speciesCode, lat, lng, distKm)
       .then((s) => { if (live) { setStats(s); setState('ok'); } })
       .catch(() => { if (live) setState('error'); });
     return () => { live = false; };
-  }, [speciesCode, lat, lng, distKm]);
+  }, [inView, speciesCode, lat, lng, distKm]);
 
-  if (state === 'loading') {
-    return <Shell t={t}><span style={{ color: t.fg3, fontFamily: t.mono, fontSize: 11 }}>Reading chase odds…</span></Shell>;
-  }
-  if (state === 'error' || !stats) {
-    return <Shell t={t}><span style={{ color: t.fg3, fontFamily: t.mono, fontSize: 11 }}>Chase odds unavailable</span></Shell>;
+  const shellStyle: React.CSSProperties = {
+    marginTop: 8, padding: '11px 12px',
+    background: t.bg1, border: `1px solid ${t.line2}`, borderRadius: 10,
+  };
+
+  if (state !== 'ok' || !stats) {
+    return (
+      <div ref={rootRef} style={shellStyle}>
+        <span style={{ color: t.fg3, fontFamily: t.mono, fontSize: 11 }}>
+          {state === 'error' ? 'Sighting odds unavailable' : 'Reading sighting odds…'}
+        </span>
+      </div>
+    );
   }
 
-  const toneColor = stats.tone === 'hot' ? t.lifer : stats.tone === 'warm' ? t.target : t.fg3;
-  const toneBg = stats.tone === 'hot' ? t.liferBg : stats.tone === 'warm' ? t.targetBg : t.seenBg;
-  const toneBorder = stats.tone === 'hot' ? t.liferBorder : stats.tone === 'warm' ? t.targetBorder : t.seenBorder;
+  const label = oddsLabel(stats.score);
+  const odds = oddsColor(stats.score, lightMode);
+  const descriptor = stats.descriptor.charAt(0).toUpperCase() + stats.descriptor.slice(1);
 
   return (
-    <Shell t={t}>
-      {/* Score + verdict row */}
-      <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 8 }}>
-        <div style={{
-          display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center',
-          minWidth: 46, padding: '4px 0',
-          background: toneBg, border: `1px solid ${toneBorder}`, borderRadius: 8,
-        }}>
-          <span style={{ fontSize: 19, fontWeight: 700, fontFamily: t.display, color: toneColor, lineHeight: 1 }}>
+    <div ref={rootRef} style={shellStyle}>
+      {/* ── Odds hero ─────────────────────────────────────────── */}
+      <div style={{
+        display: 'flex', alignItems: 'center', gap: 12,
+        padding: '10px 12px', borderRadius: 10,
+        background: odds.bg, border: `1px solid ${odds.border}`,
+      }}>
+        <div style={{ display: 'flex', alignItems: 'baseline', gap: 1, flexShrink: 0 }}>
+          <span style={{ fontSize: 28, fontWeight: 700, fontFamily: t.display, color: odds.color, lineHeight: 1 }}>
             {stats.score}
           </span>
-          <span style={{ fontSize: 8, fontFamily: t.mono, color: t.fg3, letterSpacing: '0.06em', marginTop: 2 }}>
-            ODDS
+          <span style={{ fontSize: 15, fontWeight: 700, fontFamily: t.display, color: odds.color, lineHeight: 1 }}>
+            %
           </span>
         </div>
         <div style={{ flex: 1, minWidth: 0 }}>
-          <div style={{ fontSize: 12, fontWeight: 600, color: toneColor, fontFamily: t.sans, lineHeight: 1.3 }}>
-            {stats.verdict}
+          <div style={{ fontSize: 14, fontWeight: 700, color: odds.color, fontFamily: t.sans, lineHeight: 1.2 }}>
+            {label}
           </div>
-          <div style={{ fontSize: 10.5, color: t.fg3, fontFamily: t.mono, marginTop: 2 }}>
-            {stats.hoursSinceLast !== null && (
-              <span>{fmtAgo(stats.hoursSinceLast)}</span>
-            )}
-            {stats.checklists7 > 0 && (
-              <span> · {stats.checklists7} checklist{stats.checklists7 !== 1 ? 's' : ''}/wk</span>
-            )}
+          <div style={{ fontSize: 11.5, color: t.fg2, fontFamily: t.sans, lineHeight: 1.3, marginTop: 1 }}>
+            {descriptor}
           </div>
         </div>
       </div>
 
-      {/* 14-day report sparkline */}
-      <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: stats.bestWindow ? 6 : 0 }}>
-        <div style={{ display: 'flex', gap: 2, flex: 1 }}>
+      {/* ── Best time of day (the "when to go" timing) ─────────── */}
+      {stats.bestWindow && (
+        <div style={{
+          display: 'flex', alignItems: 'center', gap: 7, marginTop: 8,
+          padding: '7px 10px', borderRadius: 8,
+          background: t.bg2, border: `1px solid ${t.line2}`,
+        }}>
+          <ClockIcon size={13} color={odds.color} />
+          <span style={{ fontSize: 11.5, color: t.fg2, fontFamily: t.sans }}>Usually seen</span>
+          <span style={{ fontSize: 12.5, fontWeight: 700, color: odds.color, fontFamily: t.mono, marginLeft: 'auto' }}>
+            {stats.bestWindow}
+          </span>
+        </div>
+      )}
+
+      {/* ── Recent report history (last 14 days) ──────────────── */}
+      <div style={{ marginTop: 10 }}>
+        <div style={{
+          fontSize: 10.5, fontWeight: 600, color: t.fg2, fontFamily: t.sans,
+          letterSpacing: '0.01em', marginBottom: 5,
+        }}>
+          Reported on {stats.daysWithReports14} of the last 14 days
+        </div>
+        <div style={{ display: 'flex', gap: 2 }}>
           {stats.daySpark.map((reported, i) => (
             <div
               key={i}
-              title={`${13 - i}d ago`}
+              title={i === 13 ? 'today' : `${13 - i}d ago`}
               style={{
-                flex: 1, height: 14, borderRadius: 2,
-                background: reported ? toneColor : t.bg3,
-                opacity: reported ? 0.55 + 0.45 * (i / 13) : 1,
+                flex: 1, height: 16, borderRadius: 2,
+                background: reported ? odds.color : t.bg3,
+                opacity: reported ? 0.6 + 0.4 * (i / 13) : 1,
+                // Outline "today" so the strip reads left→right as time, not time-of-day
+                outline: i === 13 ? `1.5px solid ${odds.color}` : 'none',
+                outlineOffset: -1.5,
               }}
             />
           ))}
         </div>
-        <span style={{ fontSize: 9, fontFamily: t.mono, color: t.fg4, letterSpacing: '0.04em', whiteSpace: 'nowrap' }}>
-          14d
-        </span>
+        <div style={{
+          display: 'flex', justifyContent: 'space-between', marginTop: 3,
+          fontSize: 8.5, fontFamily: t.mono, color: t.fg4, letterSpacing: '0.04em',
+        }}>
+          <span>14 DAYS AGO</span>
+          <span>TODAY</span>
+        </div>
       </div>
 
-      {stats.bestWindow && (
-        <div style={{ fontSize: 10.5, color: t.fg2, fontFamily: t.mono }}>
-          Best window: <span style={{ color: toneColor, fontWeight: 600 }}>{stats.bestWindow}</span>
+      {/* ── De-emphasized meta ────────────────────────────────── */}
+      {(stats.hoursSinceLast !== null || stats.checklists7 > 0) && (
+        <div style={{ fontSize: 10, color: t.fg3, fontFamily: t.mono, marginTop: 8 }}>
+          {stats.hoursSinceLast !== null && <span>{fmtAgo(stats.hoursSinceLast)}</span>}
+          {stats.hoursSinceLast !== null && stats.checklists7 > 0 && <span> · </span>}
+          {stats.checklists7 > 0 && (
+            <span>{stats.checklists7} checklist{stats.checklists7 !== 1 ? 's' : ''}/wk</span>
+          )}
         </div>
       )}
-    </Shell>
-  );
-}
-
-function Shell({ t, children }: { t: Theme; children: React.ReactNode }) {
-  return (
-    <div style={{
-      marginTop: 8, padding: '10px 11px',
-      background: t.bg2, border: `1px solid ${t.line2}`, borderRadius: 8,
-    }}>
-      {children}
     </div>
   );
 }

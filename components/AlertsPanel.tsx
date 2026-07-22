@@ -384,7 +384,6 @@ function ObsCard({ obs, t, lightMode, yearListActive, focusedCode, onFlyTo, onFo
   useMetric?: boolean;
 }) {
   const [hov, setHov] = useState(false);
-  const [expanded, setExpanded] = useState(false);
   const tc = tierTokens(obs.tier, t);
   const label = tierLabel(obs.tier, yearListActive);
   const focused = focusedCode === obs.speciesCode;
@@ -460,19 +459,13 @@ function ObsCard({ obs, t, lightMode, yearListActive, focusedCode, onFlyTo, onFo
 
       {showChase && (
         <div style={{ padding: '0 16px 12px 29px' }}>
-          <button
-            onClick={() => setExpanded(v => !v)}
-            style={{
-              display: 'inline-flex', alignItems: 'center', gap: 4,
-              background: 'transparent', border: 'none', cursor: 'pointer',
-              color: expanded ? tc.color : t.fg3, fontFamily: t.mono,
-              fontSize: 10.5, fontWeight: 600, letterSpacing: '0.03em', padding: 0,
-            }}>
-            {expanded ? '▾' : '▸'} Chase odds
-          </button>
-          {expanded && (
-            <ChasePanel speciesCode={obs.speciesCode} lat={obs.lat} lng={obs.lng} lightMode={lightMode} />
-          )}
+          <div style={{
+            fontSize: 9.5, fontWeight: 700, fontFamily: t.mono, color: t.fg3,
+            letterSpacing: '0.06em',
+          }}>
+            SIGHTING ODDS
+          </div>
+          <ChasePanel speciesCode={obs.speciesCode} lat={obs.lat} lng={obs.lng} lightMode={lightMode} lazy />
         </div>
       )}
     </div>

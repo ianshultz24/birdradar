@@ -13,8 +13,10 @@ import { parseObsDt } from './ebird';
 export interface ChaseStats {
   /** 0–100 — probability-flavored, not a calibrated probability */
   score: number;
-  /** Plain-language read on the pattern, e.g. "Staked out — reported almost daily" */
-  verdict: string;
+  /** Plain-language phrase describing the recent pattern, e.g. "reported almost daily".
+   *  The headline label ("Very Likely" etc.) is derived from `score` via oddsLabel(); this
+   *  is the supporting subtitle that gives the concrete reason. */
+  descriptor: string;
   tone: 'hot' | 'warm' | 'cold';
   daysWithReports7: number;
   daysWithReports14: number;
@@ -103,38 +105,40 @@ export function computeChaseStats(observations: Observation[], now: Date = new D
   const independence = Math.min(checklists7.size / 5, 1);
   let score = Math.round(45 * persistence + 30 * recency + 25 * independence);
 
-  // ─── Verdict ──────────────────────────────────────────────────────────────
-  let verdict: string;
+  // ─── Descriptor ───────────────────────────────────────────────────────────
+  // Plain-language reason for the pattern. The headline ("Very Likely" etc.)
+  // comes from the score; this phrase says *why* in concrete terms.
+  let descriptor: string;
   let tone: 'hot' | 'warm' | 'cold';
 
   if (hoursSinceLast === null || dayKeys14.size === 0) {
-    verdict = 'No reports in the last 2 weeks';
+    descriptor = 'no reports in the last 2 weeks';
     tone = 'cold';
     score = Math.min(score, 10);
   } else if (dayKeys14.size === 1 && hoursSinceLast <= 24) {
-    verdict = 'Just found — first reported today';
+    descriptor = 'first reported today';
     tone = 'hot';
     score = Math.max(score, 55); // fresh discovery: history can't speak yet, recency can
   } else if (hoursSinceLast > 96) {
-    verdict = `Gone cold — last reported ${Math.round(hoursSinceLast / 24)} days ago`;
+    descriptor = `last reported ${Math.round(hoursSinceLast / 24)} days ago`;
     tone = 'cold';
   } else if (dayKeys14.size === 1) {
-    verdict = 'One-day wonder — a single day of reports';
+    descriptor = 'a single day of reports';
     tone = 'cold';
   } else if (dayKeys7.size >= 5) {
-    verdict = 'Staked out — reported almost daily';
+    descriptor = 'reported almost daily';
     tone = 'hot';
   } else if (dayKeys7.size >= 3) {
-    verdict = 'Being seen most days';
+    descriptor = 'being seen most days';
     tone = score >= 65 ? 'hot' : 'warm';
   } else {
-    verdict = 'Intermittent — reported occasionally';
+    descriptor = 'reported occasionally';
     tone = score >= 35 ? 'warm' : 'cold';
   }
 
   return {
     score: Math.max(0, Math.min(100, score)),
-    verdict,
+    descriptor,
     tone,
     daysWithReports7: dayKeys7.size,
     daysWithReports14: dayKeys14.size,

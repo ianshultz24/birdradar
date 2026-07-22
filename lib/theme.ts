@@ -61,6 +61,53 @@ export function tierTokens(tier: string, t: Theme) {
   return { color: t.seen, bg: t.seenBg, border: t.seenBorder };
 }
 
+// ─── Sighting-odds presentation ───────────────────────────────────────────────
+// A 0–100 chaseability score is shown to birders as a plain-language likelihood.
+// The label is the primary signal; the percent is secondary.
+
+export function oddsLabel(score: number): string {
+  if (score >= 90) return 'Almost Certain';
+  if (score >= 70) return 'Very Likely';
+  if (score >= 40) return 'Likely';
+  if (score >= 15) return 'Possible';
+  if (score >= 5) return 'Unlikely';
+  return 'Very Rare';
+}
+
+function hexToRgb(hex: string): [number, number, number] {
+  const h = hex.replace('#', '');
+  return [parseInt(h.slice(0, 2), 16), parseInt(h.slice(2, 4), 16), parseInt(h.slice(4, 6), 16)];
+}
+const lerp = (a: number, b: number, f: number) => Math.round(a + (b - a) * f);
+
+/**
+ * Continuous color for an odds score: a true-green → gold → gray gradient.
+ * High odds = green ("go"), mid = gold ("maybe"), low = gray ("don't bother").
+ * `color` is text-legible; `bg`/`border` are soft tints, matching tierTokens()'s shape.
+ */
+export function oddsColor(score: number, lightMode: boolean): { color: string; bg: string; border: string } {
+  const s = Math.max(0, Math.min(100, score)) / 100;
+  const anchors = lightMode
+    ? { high: '#15803D', mid: '#CA8A04', low: '#9CA3AF' }
+    : { high: '#4ADE80', mid: '#FACC15', low: '#71717A' };
+  const [hr, hg, hb] = hexToRgb(anchors.high);
+  const [mr, mg, mb] = hexToRgb(anchors.mid);
+  const [lr, lg, lb] = hexToRgb(anchors.low);
+  let r: number, g: number, b: number;
+  if (s >= 0.5) {
+    const f = (s - 0.5) / 0.5; // gold → green
+    r = lerp(mr, hr, f); g = lerp(mg, hg, f); b = lerp(mb, hb, f);
+  } else {
+    const f = s / 0.5; // gray → gold
+    r = lerp(lr, mr, f); g = lerp(lg, mg, f); b = lerp(lb, mb, f);
+  }
+  return {
+    color: `rgb(${r}, ${g}, ${b})`,
+    bg: `rgba(${r}, ${g}, ${b}, 0.10)`,
+    border: `rgba(${r}, ${g}, ${b}, 0.22)`,
+  };
+}
+
 export function tierLabel(tier: string, yearListActive = false): string {
   if (yearListActive) {
     if (tier === 'lifer-rare') return 'Year · Rare';
