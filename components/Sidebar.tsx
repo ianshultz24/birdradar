@@ -45,6 +45,8 @@ interface Props {
   onRefreshNow: () => void;
   onCloseHotspotPanel: () => void;
   onSyncMerge: (payload: SyncPayload) => void;
+  /** OS-level reduced-motion preference — forces low battery mode on */
+  prefersReducedMotion: boolean;
 }
 
 const TABS: { id: Tab; label: string; Icon: React.FC<{ size?: number }> }[] = [
@@ -61,7 +63,7 @@ export default function Sidebar(props: Props) {
     focusedSpecies, onFlyTo, onFocusSpecies,
     onAddToLifeList, onRemoveFromLifeList, onAddToYearList, onRemoveFromYearList,
     onBulkImport, onClearLifeList, onClearYearList, onSettingsChange,
-    onRefreshNow, onCloseHotspotPanel, onSyncMerge,
+    onRefreshNow, onCloseHotspotPanel, onSyncMerge, prefersReducedMotion,
   } = props;
 
   const [hoveredTab, setHoveredTab] = useState<Tab | null>(null);
@@ -127,6 +129,7 @@ export default function Sidebar(props: Props) {
           yearList={yearList}
           lifeListMeta={lifeListMeta}
           onSyncMerge={onSyncMerge}
+          prefersReducedMotion={prefersReducedMotion}
         />
       )}
 

@@ -54,7 +54,12 @@ export interface AppSettings {
   notificationsEnabled: boolean;
   soundEnabled: boolean;
   showRadiusCircle: boolean;
+  /** @deprecated radar overlay archived — see components/archive. Kept so stored
+   *  and cross-device-synced settings blobs don't churn. */
   showRadarAnimation: boolean;
+  /** Disables marker pulse/glow and drop shadows. On by default; also forced on
+   *  when the OS reports `prefers-reduced-motion: reduce`. */
+  lowBatteryMode: boolean;
 }
 
 export const DEFAULT_SETTINGS: AppSettings = {
@@ -70,6 +75,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
   soundEnabled: false,
   showRadiusCircle: false,
   showRadarAnimation: false,
+  lowBatteryMode: true,
 };
 
 export function fmtDist(km: number, useMetric = true): string {

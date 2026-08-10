@@ -50,6 +50,19 @@ body {
 
 .bird-pin-pulse { animation: pinBobPulse 2.4s ease-in-out infinite; transform-origin: 50% 100%; }
 
+/* ─── Low battery mode ─── */
+/* Root class toggled from app/page.tsx when the setting is on or the OS reports
+   prefers-reduced-motion. Kills the always-on marker animations and the animated
+   drop-shadow filters, which are by far the most expensive thing on the map. */
+.low-fi .bird-pin-pulse,
+.low-fi .bird-pulse-blue,
+.low-fi .bird-pulse-white { animation: none !important; }
+
+.low-fi .leaflet-marker-icon,
+.low-fi .leaflet-marker-icon * { filter: none !important; box-shadow: none !important; }
+
+.low-fi .leaflet-marker-icon svg { overflow: visible; }
+
 /* ─── Leaflet popup overrides — Option B clean card style ─── */
 .bird-popup .leaflet-popup-content-wrapper {
   background: #FFFFFF;
@@ -109,8 +122,18 @@ body {
 .dark ::-webkit-scrollbar-thumb:hover { background: rgba(255, 255, 255, 0.18); }
 
 /* ─── Leaflet map ─── */
-.leaflet-container { background: #F1F3F5 !important; }
+/* Must match the tile canvas or zooming out flashes the wrong colour in the gaps
+   before tiles land. Values track Stadia alidade_smooth / alidade_smooth_dark. */
+/* !important because layout.tsx imports leaflet.css *after* this file, and
+   leaflet's own `.leaflet-container { background: #ddd }` would otherwise win. */
+.leaflet-container { background: #e8ecf0 !important; }
+.dark .leaflet-container { background: #0a0e14 !important; }
 .leaflet-marker-shadow { display: none; }
+
+/* Placeholder shown while the map chunk loads — same canvas colour as above so
+   the handover to the real map is invisible. */
+.map-loading { background: #e8ecf0; }
+.dark .map-loading { background: #0a0e14; }
 
 /* ─── Tooltip / control polish ─── */
 .leaflet-control-zoom a {

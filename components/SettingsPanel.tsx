@@ -27,14 +27,17 @@ interface Props {
   lifeListMeta: Record<string, SpeciesMeta>;
   /** Merge lists pulled from a sync code into the local lists */
   onSyncMerge: (payload: SyncPayload) => void;
+  /** OS-level reduced-motion preference — forces low battery mode on */
+  prefersReducedMotion: boolean;
 }
 
 export default function SettingsPanel({
   settings, onChange, apiStatus, onRefreshNow, loading, alertCenter,
-  lifeList, yearList, lifeListMeta, onSyncMerge,
+  lifeList, yearList, lifeListMeta, onSyncMerge, prefersReducedMotion,
 }: Props) {
   const t = getTheme(settings.lightMode);
   const [refreshHov, setRefreshHov] = useState(false);
+  const lowFi = settings.lowBatteryMode || prefersReducedMotion;
 
   function set<K extends keyof AppSettings>(key: K, value: AppSettings[K]) {
     onChange({ ...settings, [key]: value });
@@ -79,12 +82,27 @@ export default function SettingsPanel({
             onChange={v => set('dimSeenSpecies', v)} t={t}/>
         </Row>
         <Row t={t}>
-          <RowToggle label="Lifer pulse animation" checked={settings.liferPulse}
-            onChange={v => set('liferPulse', v)} t={t}/>
+          <RowToggle
+            label="Lifer pulse animation"
+            hint={lowFi
+              ? (prefersReducedMotion && !settings.lowBatteryMode
+                  ? 'Off — your system asks for reduced motion'
+                  : 'Off while low battery mode is on')
+              : undefined}
+            checked={settings.liferPulse}
+            onChange={v => set('liferPulse', v)}
+            t={t}
+            disabled={lowFi}
+          />
         </Row>
         <Row t={t} last>
-          <RowToggle label="Radar animation" checked={settings.showRadarAnimation}
-            onChange={v => set('showRadarAnimation', v)} t={t}/>
+          <RowToggle
+            label="Low battery mode"
+            hint="Disables marker animations and glow"
+            checked={settings.lowBatteryMode}
+            onChange={v => set('lowBatteryMode', v)}
+            t={t}
+          />
         </Row>
       </Group>
 
@@ -518,11 +536,14 @@ function Row({ t, last, children }: { t: Theme; last?: boolean; children: React.
   );
 }
 
-function RowToggle({ label, checked, onChange, t }: {
+function RowToggle({ label, hint, checked, onChange, t, disabled }: {
   label: string;
+  /** Optional second line under the label — explanation or why the row is disabled */
+  hint?: string;
   checked: boolean;
   onChange: (v: boolean) => void;
   t: Theme;
+  disabled?: boolean;
 }) {
   const [hov, setHov] = useState(false);
 
@@ -533,13 +554,21 @@ function RowToggle({ label, checked, onChange, t }: {
       style={{
         display: 'flex', justifyContent: 'space-between', alignItems: 'center',
         padding: '13px 20px',
-        background: hov ? t.bg2 : 'transparent',
+        background: hov && !disabled ? t.bg2 : 'transparent',
         transition: 'background 0.12s',
-        cursor: 'pointer',
+        cursor: disabled ? 'default' : 'pointer',
+        opacity: disabled ? 0.45 : 1,
       }}
-      onClick={() => onChange(!checked)}
+      onClick={() => { if (!disabled) onChange(!checked); }}
     >
-      <span style={{ fontSize: 13, color: t.fg1, fontFamily: t.sans }}>{label}</span>
+      <div style={{ minWidth: 0, paddingRight: 12 }}>
+        <div style={{ fontSize: 13, color: t.fg1, fontFamily: t.sans }}>{label}</div>
+        {hint && (
+          <div style={{ fontSize: 11, color: t.fg3, fontFamily: t.mono, marginTop: 3, lineHeight: 1.35 }}>
+            {hint}
+          </div>
+        )}
+      </div>
       <div
         style={{
           width: 36, height: 20, borderRadius: 12, flexShrink: 0,

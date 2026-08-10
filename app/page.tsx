@@ -10,6 +10,7 @@ import { XIcon } from '@/components/Icons';
 import { getTheme } from '@/lib/theme';
 
 import { useMobile } from '@/hooks/useMobile';
+import { usePrefersReducedMotion } from '@/hooks/usePrefersReducedMotion';
 import { mergeObservations, DEFAULT_SETTINGS, fmtDist } from '@/lib/ebird';
 import type { Observation, Hotspot, ClassifiedObservation, AppSettings, TargetSpecies } from '@/lib/ebird';
 import { classifyAll } from '@/lib/classify';
@@ -46,11 +47,13 @@ const LIFER_ALERT_RADIUS_KM = 16.09; // 10 miles
 // Dynamic import of map (no SSR — Leaflet requires browser DOM)
 const BirdMap = dynamic(() => import('@/components/Map'), {
   ssr: false,
+  // Background comes from a class, not an inline style, so it can follow the
+  // .dark theme without risking a hydration mismatch on the style attribute.
   loading: () => (
     <div
+      className="map-loading"
       style={{
         height: '100%',
-        background: '#F1F3F5',
         display: 'flex',
         alignItems: 'center',
         justifyContent: 'center',
@@ -88,7 +91,11 @@ export default function Home() {
   const [toasts, setToasts] = useState<ToastItem[]>([]);
   const [locationNotice, setLocationNotice] = useState(false);
   const isMobile = useMobile();
+  const prefersReducedMotion = usePrefersReducedMotion();
   const [drawerOpen, setDrawerOpen] = useState(false);
+
+  /** Low battery mode — user setting, or forced on by the OS reduced-motion preference */
+  const lowFi = settings.lowBatteryMode || prefersReducedMotion;
 
   const lastFetchRef = useRef(0);
   const settingsRef = useRef(settings);
@@ -428,6 +435,11 @@ export default function Home() {
     document.documentElement.classList.toggle('dark', !settings.lightMode);
   }, [settings.lightMode]);
 
+  // Low battery mode — global kill switch for marker animations and filters
+  useEffect(() => {
+    document.documentElement.classList.toggle('low-fi', lowFi);
+  }, [lowFi]);
+
   // Auto-refresh — skips ticks while the tab is hidden (no point burning API
   // quota for an invisible map); catches up once when the tab becomes visible.
   useEffect(() => {
@@ -661,6 +673,7 @@ export default function Home() {
         onRefreshNow={() => fetchData(true)}
         onCloseHotspotPanel={() => setHotspotPanel(null)}
         onSyncMerge={handleSyncMerge}
+        prefersReducedMotion={prefersReducedMotion}
       />
 
       <div style={{ flex: 1, position: 'relative', overflow: 'hidden' }}>
@@ -685,6 +698,7 @@ export default function Home() {
           userLocation={userLocation}
           focusedSpecies={focusedSpecies}
           loading={loading}
+          lowFi={lowFi}
           onAddToLifeList={handleAddToLifeList}
           onHotspotDetail={setHotspotPanel}
           onPinDrop={handlePinDrop}
