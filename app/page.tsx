@@ -5,6 +5,7 @@ import dynamic from 'next/dynamic';
 
 import Sidebar from '@/components/Sidebar';
 import StatusBar from '@/components/StatusBar';
+import SpeciesDetailPanel from '@/components/SpeciesDetailPanel';
 import NotificationToast, { type ToastItem } from '@/components/NotificationToast';
 import { XIcon } from '@/components/Icons';
 import { getTheme } from '@/lib/theme';
@@ -13,6 +14,7 @@ import { useMobile } from '@/hooks/useMobile';
 import { usePrefersReducedMotion } from '@/hooks/usePrefersReducedMotion';
 import { mergeObservations, DEFAULT_SETTINGS, fmtDist } from '@/lib/ebird';
 import type { Observation, Hotspot, ClassifiedObservation, AppSettings, TargetSpecies } from '@/lib/ebird';
+import { buildMarkerGroups } from '@/lib/markers';
 import { classifyAll } from '@/lib/classify';
 import { migrateStaleCodesOnce } from '@/lib/taxonomy';
 import { haversineKm } from '@/lib/geo';
@@ -69,7 +71,9 @@ const BirdMap = dynamic(() => import('@/components/Map'), {
 });
 
 export default function Home() {
-  const [center, setCenter] = useState<[number, number]>(DEFAULT_CENTER);
+  // Where we search when no pin is dropped: the GPS fix, a deep link's coords, or
+  // the default region. `searchCenter` below is what everything actually reads.
+  const [baseCenter, setBaseCenter] = useState<[number, number]>(DEFAULT_CENTER);
   const [userLocation, setUserLocation] = useState<[number, number] | null>(null);
   const [pinLocation, setPinLocation] = useState<[number, number] | null>(null);
   const [lifeList, setLifeList] = useState<string[]>([]);
@@ -88,6 +92,8 @@ export default function Home() {
   const [apiStatus, setApiStatus] = useState<'ok' | 'error' | 'loading'>('loading');
   const [lastFetch, setLastFetch] = useState(0);
   const [focusedSpecies, setFocusedSpecies] = useState<{ code: string; name: string } | null>(null);
+  /** Location key of the sighting whose detail panel is open. */
+  const [selectedLocKey, setSelectedLocKey] = useState<string | null>(null);
   const [toasts, setToasts] = useState<ToastItem[]>([]);
   const [locationNotice, setLocationNotice] = useState(false);
   const isMobile = useMobile();
@@ -97,16 +103,28 @@ export default function Home() {
   /** Low battery mode — user setting, or forced on by the OS reduced-motion preference */
   const lowFi = settings.lowBatteryMode || prefersReducedMotion;
 
+  // ─── Search area: one derived value, read by the circle, the markers and the
+  // fetches alike. Splitting this across `center` and `pinLocation` is what let
+  // clearing a pin move the circle while the sightings stayed at the old point.
+  const searchCenter = useMemo<[number, number]>(
+    () => pinLocation ?? baseCenter,
+    [pinLocation, baseCenter]
+  );
+  // A dropped pin always searches the eBird maximum; otherwise the user's setting.
+  const searchRadiusKm = pinLocation ? 50 : Math.min(settings.searchRadius, 50);
+  // Coordinates are rounded to 2 decimals (~1.1 km) so nearby users produce
+  // identical request URLs and share the CDN cache entry.
+  const searchKey = `${searchCenter[0].toFixed(2)},${searchCenter[1].toFixed(2)},${searchRadiusKm}`;
+
   const lastFetchRef = useRef(0);
   const settingsRef = useRef(settings);
-  const centerRef = useRef(center);
-  const pinLocationRef = useRef<[number, number] | null>(null);
+  const searchCenterRef = useRef(searchCenter);
+  const searchRadiusRef = useRef(searchRadiusKm);
   const lifeListRef = useRef(lifeList);
   const yearListRef = useRef(yearList);
   const lifeListMetaRef = useRef(lifeListMeta);
   const notifiedRef = useRef<Set<string>>(new Set());
   const toastIdRef = useRef(0);
-  const pinEffectFirstRunRef = useRef(false);
   /** Tracks whether this is the first successful fetch (used to silence initial notification flood) */
   const isFirstFetchRef = useRef(true);
   /** Incremented each time fetchData starts; lets in-flight fetches detect they've been superseded */
@@ -124,8 +142,8 @@ export default function Home() {
 
   // Keep refs in sync
   settingsRef.current = settings;
-  centerRef.current = center;
-  pinLocationRef.current = pinLocation;
+  searchCenterRef.current = searchCenter;
+  searchRadiusRef.current = searchRadiusKm;
   lifeListRef.current = lifeList;
   yearListRef.current = yearList;
   lifeListMetaRef.current = lifeListMeta;
@@ -145,7 +163,7 @@ export default function Home() {
     const hasDeepLink =
       !isNaN(dlLat) && !isNaN(dlLng) && dlLat >= -90 && dlLat <= 90 && dlLng >= -180 && dlLng <= 180;
     if (hasDeepLink) {
-      setCenter([dlLat, dlLng]);
+      setBaseCenter([dlLat, dlLng]);
       setFlyToTarget([dlLat, dlLng]);
       const sp = params.get('sp');
       if (sp && /^[a-zA-Z0-9]+$/.test(sp)) setFocusedSpecies({ code: sp, name: sp });
@@ -158,7 +176,7 @@ export default function Home() {
       navigator.geolocation.getCurrentPosition(
         (pos) => {
           const coords: [number, number] = [pos.coords.latitude, pos.coords.longitude];
-          setCenter(coords);
+          setBaseCenter(coords);
           setUserLocation(coords);
         },
         () => {
@@ -217,14 +235,12 @@ export default function Home() {
   const fetchData = useCallback(async (force = false) => {
     const now = Date.now();
 
-    // Use pin location when active, otherwise user's GPS/default location.
-    // Coordinates are rounded to 2 decimals (~1.1 km) so nearby users produce
-    // identical request URLs and share the CDN cache entry.
-    const [rawLat, rawLng] = pinLocationRef.current ?? centerRef.current;
+    // Everything about *where* comes from searchCenter — there is no second
+    // opinion to fall out of sync with.
+    const [rawLat, rawLng] = searchCenterRef.current;
     const lat = rawLat.toFixed(2);
     const lng = rawLng.toFixed(2);
-    // Settings radius is in km; pin always uses 50 km (eBird API max)
-    const distKm = pinLocationRef.current ? 50 : Math.min(settingsRef.current.searchRadius, 50);
+    const distKm = searchRadiusRef.current;
     const paramsKey = `${lat},${lng},${distKm}`;
 
     // An identical fetch is already running — let it finish
@@ -354,8 +370,7 @@ export default function Home() {
       const isFirstFetch = isFirstFetchRef.current;
       isFirstFetchRef.current = false;
 
-      const userLat = pinLocationRef.current?.[0] ?? centerRef.current[0];
-      const userLng = pinLocationRef.current?.[1] ?? centerRef.current[1];
+      const [userLat, userLng] = searchCenterRef.current;
 
       for (const obs of withFreq) {
         if (obs.tier !== 'lifer' && obs.tier !== 'lifer-rare') continue;
@@ -399,36 +414,36 @@ export default function Home() {
     }
   }, []);
 
-  // Initial fetch
+  // The one place a search is started: mount, GPS fix, pin drop, pin clear, and
+  // radius change all funnel through the same derived key. Previously these were
+  // three effects poking `lastFetchRef` from the outside, and the pin-clear path
+  // left the old sightings on the map until something else forced a refresh.
+  const prevSearchKeyRef = useRef('');
   useEffect(() => {
-    fetchData(true);
-  }, [fetchData]);
+    if (prevSearchKeyRef.current === searchKey) return;
+    const isFirstRun = prevSearchKeyRef.current === '';
+    prevSearchKeyRef.current = searchKey;
 
-  // Re-fetch when pin is dropped or cleared; reset notifications for new area
-  // Skip the initial mount run (pinLocation hasn't changed — it's just the first render)
-  useEffect(() => {
-    if (!pinEffectFirstRunRef.current) {
-      pinEffectFirstRunRef.current = true;
-      return;
+    if (!isFirstRun) {
+      // Drop the old area's layers up front. Leaving them up while the new fetch
+      // is in flight is exactly the stale-pin bug: markers from one place, circle
+      // around another.
+      setObservations([]);
+      setHotspots([]);
+      setTargetSpecies([]);
+      setSelectedLocKey(null);
+      notifiedRef.current = new Set();
+      isFirstFetchRef.current = true; // silence the alert flood for a brand new area
     }
-    notifiedRef.current = new Set();
-    isFirstFetchRef.current = true; // first fetch at new pin location is always silent
-    fetchData(true);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [pinLocation]);
 
-  // Re-fetch when location or radius changes
-  const prevSearchKey = useRef('');
-  useEffect(() => {
-    const key = `${center[0].toFixed(4)},${center[1].toFixed(4)},${settings.searchRadius}`;
-    if (key === prevSearchKey.current) return;
-    prevSearchKey.current = key;
-    if (lastFetchRef.current > 0) {
-      lastFetchRef.current = 0;
-      isFirstFetchRef.current = true; // treat center/radius change as "first fetch" — silence notification flood
-      fetchData(true);
-    }
-  }, [center, settings.searchRadius, fetchData]);
+    // Deliberately does NOT zero `lastFetchRef` to force the fetch through. The
+    // throttle only fires when the params key repeats, and a changed searchKey
+    // means a changed params key — so there is nothing to bypass. Zeroing it (as
+    // the old pin/centre effects did) also told the auto-refresh visibility
+    // catch-up that the data was infinitely stale, firing a second identical
+    // round of requests moments after this one.
+    fetchData(true);
+  }, [searchKey, fetchData]);
 
   // Sync dark/light class on <html> for global CSS selectors (.dark scrollbar, etc.)
   useEffect(() => {
@@ -507,6 +522,22 @@ export default function Home() {
     return () => clearTimeout(timer);
   }, []);
 
+  // Sightings grouped into map pins. Built here rather than inside the map so the
+  // detail panel resolves `selectedLocKey` against the very same array the markers
+  // were rendered from — a marker key can't point at a group the panel would
+  // assemble differently.
+  const markerGroups = useMemo(
+    () => buildMarkerGroups(observations, settings.dimSeenSpecies),
+    [observations, settings.dimSeenSpecies]
+  );
+
+  const selectedGroup = useMemo(
+    () => (selectedLocKey ? markerGroups.find(([key]) => key === selectedLocKey)?.[1] ?? null : null),
+    [markerGroups, selectedLocKey]
+  );
+
+  const lifeSet = useMemo(() => new Set(lifeList), [lifeList]);
+
   // Species arriving in the region soon that aren't being seen locally yet —
   // lifers first. Recomputed from the cached forecast; no extra fetches.
   const arrivingSpecies = useMemo<ArrivingSpecies[]>(() => {
@@ -539,15 +570,16 @@ export default function Home() {
     });
   }
 
+  // Pin drop and clear only move the pin. The searchKey effect above owns
+  // everything that follows from that — clearing layers, resetting alert state
+  // and refetching — so the two paths can't drift apart.
   function handlePinDrop(lat: number, lng: number) {
     setPinLocation([lat, lng]);
     setFlyToTarget([lat, lng]);
-    lastFetchRef.current = 0;
   }
 
   function handleClearPin() {
     setPinLocation(null);
-    lastFetchRef.current = 0;
   }
 
   function handleRemoveFromLifeList(code: string) {
@@ -600,17 +632,39 @@ export default function Home() {
     handleBulkImport(payload.lifeList ?? [], payload.yearList ?? [], payload.meta ?? {});
   }
 
+  // The only place `drawerOpen` is ever set true. On mobile the drawer and the
+  // species detail sheet occupy the same strip above the tab bar, so opening one
+  // has to close the other — routing every opener through here keeps that
+  // invariant in one place instead of at each call site.
+  const openDrawer = useCallback(() => {
+    setSelectedLocKey(null);
+    setDrawerOpen(true);
+  }, []);
+
   function handleTabChange(tab: Tab) {
     if (isMobile) {
       if (tab === activeTab && drawerOpen) {
         setDrawerOpen(false);
       } else {
         setActiveTab(tab);
-        setDrawerOpen(true);
+        openDrawer();
       }
     } else {
       setActiveTab(tab);
     }
+  }
+
+  function handleSelectSighting(locKey: string) {
+    setSelectedLocKey(locKey);
+    if (isMobile) setDrawerOpen(false);
+  }
+
+  function handleHotspotDetail(hs: Hotspot) {
+    setHotspotPanel(hs);
+    // The hotspot panel lives inside the sidebar, which on mobile is a closed
+    // drawer — without this the click would appear to do nothing.
+    if (isMobile) openDrawer();
+    else setSelectedLocKey(null);
   }
 
   function handleSettingsChange(s: AppSettings) {
@@ -658,7 +712,7 @@ export default function Home() {
         settings={settings}
         apiStatus={apiStatus}
         loading={loading}
-        userCenter={pinLocation ?? center}
+        userCenter={searchCenter}
         focusedSpecies={focusedSpecies}
         onFlyTo={handleFlyTo}
         onFocusSpecies={handleFocusSpecies}
@@ -687,24 +741,43 @@ export default function Home() {
           isMobile={isMobile}
         />
         <BirdMap
-          center={center}
+          searchCenter={searchCenter}
+          searchRadiusKm={searchRadiusKm}
           isMobile={isMobile}
           observations={observations}
+          markerGroups={markerGroups}
           hotspots={hotspots}
           flyToTarget={flyToTarget}
           settings={settings}
-          lifeList={lifeList}
           pinLocation={pinLocation}
           userLocation={userLocation}
           focusedSpecies={focusedSpecies}
+          selectedLocKey={selectedLocKey}
           loading={loading}
           lowFi={lowFi}
-          onAddToLifeList={handleAddToLifeList}
-          onHotspotDetail={setHotspotPanel}
+          onSelectSighting={handleSelectSighting}
+          onCloseDetail={() => setSelectedLocKey(null)}
+          onHotspotDetail={handleHotspotDetail}
           onPinDrop={handlePinDrop}
           onClearPin={handleClearPin}
           onRefreshNow={() => fetchData(true)}
         />
+
+        {selectedGroup && (
+          <SpeciesDetailPanel
+            // Remounts on selection change, which resets the pager and any
+            // half-filled add-to-life-list form.
+            key={selectedLocKey}
+            group={selectedGroup}
+            lifeSet={lifeSet}
+            focusedCode={focusedSpecies?.code ?? null}
+            lightMode={lm}
+            isMobile={isMobile}
+            reduceMotion={lowFi}
+            onAddToLifeList={handleAddToLifeList}
+            onClose={() => setSelectedLocKey(null)}
+          />
+        )}
       </div>
 
       <NotificationToast

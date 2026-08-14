@@ -1,7 +1,8 @@
 'use client';
 
 import { useEffect, useRef, useState } from 'react';
-import { fetchChaseStats, type ChaseStats } from '@/lib/chase';
+import { fetchChaseStats, SPARK_DAYS, type ChaseStats } from '@/lib/chase';
+import type { Observation } from '@/lib/ebird';
 import { getTheme, oddsLabel, oddsColor } from '@/lib/theme';
 import { ClockIcon } from '@/components/Icons';
 
@@ -15,8 +16,12 @@ interface Props {
   lightMode: boolean;
   /** Defer the fetch until scrolled into view — for list contexts (sidebar) where
    *  many panels mount at once and firing every fetch would trip the rate limit.
-   *  The map popup shows one card at a time and leaves this off (fetch eagerly). */
+   *  The detail panel shows one card at a time and leaves this off (fetch eagerly). */
   lazy?: boolean;
+  /** Observations the caller is already showing for this species. Folded into the
+   *  fetched history so the graph can't contradict the last-seen text beside it.
+   *  Must be a stable reference — it's an effect dependency. */
+  seedObs?: Observation[];
 }
 
 /**
@@ -25,7 +30,7 @@ interface Props {
  * plain-language answer to "will it still be there?" — a likelihood, when it's
  * usually seen, and how often it's been reported lately.
  */
-export default function ChasePanel({ speciesCode, lat, lng, distKm = 25, lightMode, lazy = false }: Props) {
+export default function ChasePanel({ speciesCode, lat, lng, distKm = 25, lightMode, lazy = false, seedObs }: Props) {
   const [stats, setStats] = useState<ChaseStats | null>(null);
   const [state, setState] = useState<'loading' | 'ok' | 'error'>('loading');
   const [inView, setInView] = useState(() => !lazy || typeof IntersectionObserver === 'undefined');
@@ -47,11 +52,11 @@ export default function ChasePanel({ speciesCode, lat, lng, distKm = 25, lightMo
   useEffect(() => {
     if (!inView) return;
     let live = true;
-    fetchChaseStats(speciesCode, lat, lng, distKm)
+    fetchChaseStats(speciesCode, lat, lng, distKm, seedObs)
       .then((s) => { if (live) { setStats(s); setState('ok'); } })
       .catch(() => { if (live) setState('error'); });
     return () => { live = false; };
-  }, [inView, speciesCode, lat, lng, distKm]);
+  }, [inView, speciesCode, lat, lng, distKm, seedObs]);
 
   const shellStyle: React.CSSProperties = {
     marginTop: 8, padding: '11px 12px',
@@ -113,43 +118,52 @@ export default function ChasePanel({ speciesCode, lat, lng, distKm = 25, lightMo
         </div>
       )}
 
-      {/* ── Recent report history (last 14 days) ──────────────── */}
+      {/* ── Recent report history ─────────────────────────────── */}
       <div style={{ marginTop: 10 }}>
         <div style={{
           fontSize: 10.5, fontWeight: 600, color: t.fg2, fontFamily: t.sans,
           letterSpacing: '0.01em', marginBottom: 5,
         }}>
-          Reported on {stats.daysWithReports14} of the last 14 days
+          {/* "at least": eBird's geo history returns only the most recent report per
+              location, so quiet days here are unproven, not proven absent. */}
+          {stats.daysWithReports14 === 0
+            ? `No reports nearby in the last ${SPARK_DAYS} days`
+            : `Reported on at least ${stats.daysWithReports14} of the last ${SPARK_DAYS} days nearby`}
         </div>
         <div style={{ display: 'flex', gap: 2 }}>
-          {stats.daySpark.map((reported, i) => (
-            <div
-              key={i}
-              title={i === 13 ? 'today' : `${13 - i}d ago`}
-              style={{
-                flex: 1, height: 16, borderRadius: 2,
-                background: reported ? odds.color : t.bg3,
-                opacity: reported ? 0.6 + 0.4 * (i / 13) : 1,
-                // Outline "today" so the strip reads left→right as time, not time-of-day
-                outline: i === 13 ? `1.5px solid ${odds.color}` : 'none',
-                outlineOffset: -1.5,
-              }}
-            />
-          ))}
+          {stats.daySpark.map((reported, i) => {
+            const daysAgo = SPARK_DAYS - 1 - i;
+            return (
+              <div
+                key={i}
+                title={daysAgo === 0 ? 'today' : `${daysAgo}d ago`}
+                style={{
+                  flex: 1, height: 16, borderRadius: 2,
+                  background: reported ? odds.color : t.bg3,
+                  opacity: reported ? 0.6 + 0.4 * (i / (SPARK_DAYS - 1)) : 1,
+                  // Outline "today" so the strip reads left→right as time, not time-of-day
+                  outline: daysAgo === 0 ? `1.5px solid ${odds.color}` : 'none',
+                  outlineOffset: -1.5,
+                }}
+              />
+            );
+          })}
         </div>
         <div style={{
           display: 'flex', justifyContent: 'space-between', marginTop: 3,
           fontSize: 8.5, fontFamily: t.mono, color: t.fg4, letterSpacing: '0.04em',
         }}>
-          <span>14 DAYS AGO</span>
+          <span>{SPARK_DAYS} DAYS AGO</span>
           <span>TODAY</span>
         </div>
       </div>
 
       {/* ── De-emphasized meta ────────────────────────────────── */}
+      {/* "nearby" is load-bearing: this covers the whole search radius, while the
+          card's own timestamp is for one location. They can legitimately differ. */}
       {(stats.hoursSinceLast !== null || stats.checklists7 > 0) && (
         <div style={{ fontSize: 10, color: t.fg3, fontFamily: t.mono, marginTop: 8 }}>
-          {stats.hoursSinceLast !== null && <span>{fmtAgo(stats.hoursSinceLast)}</span>}
+          {stats.hoursSinceLast !== null && <span>last seen nearby {fmtAgo(stats.hoursSinceLast)}</span>}
           {stats.hoursSinceLast !== null && stats.checklists7 > 0 && <span> · </span>}
           {stats.checklists7 > 0 && (
             <span>{stats.checklists7} checklist{stats.checklists7 !== 1 ? 's' : ''}/wk</span>
@@ -160,8 +174,12 @@ export default function ChasePanel({ speciesCode, lat, lng, distKm = 25, lightMo
   );
 }
 
+// Floors, exactly like timeAgo() in lib/ebird.ts. These two numbers now come from
+// the same observations and sit inches apart in the detail panel — rounding one
+// and flooring the other made a 17.6h-old sighting read as "17h ago" above and
+// "18h ago" below.
 function fmtAgo(hours: number): string {
-  if (hours < 1) return 'seen <1h ago';
-  if (hours < 24) return `seen ${Math.round(hours)}h ago`;
-  return `seen ${Math.round(hours / 24)}d ago`;
+  if (hours < 1) return '<1h ago';
+  if (hours < 24) return `${Math.floor(hours)}h ago`;
+  return `${Math.floor(hours / 24)}d ago`;
 }

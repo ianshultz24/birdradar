@@ -6,6 +6,7 @@ import {
   TileLayer,
   Marker,
   Popup,
+  Tooltip,
   Circle,
   useMap,
   useMapEvents,
@@ -15,10 +16,11 @@ import L from 'leaflet';
 import type { ClassifiedObservation, Hotspot } from '@/lib/ebird';
 import type { AppSettings } from '@/lib/ebird';
 import { timeAgo } from '@/lib/ebird';
-import { getTheme, tierTokens, tierLabel, type Theme } from '@/lib/theme';
+import type { MarkerGroup } from '@/lib/markers';
+import { getTheme, type Theme } from '@/lib/theme';
 import { useStableCallback } from '@/hooks/useStableCallback';
 import { RefreshCwIcon, CrosshairIcon, MapPinIcon, XIcon } from '@/components/Icons';
-import ChasePanel from './ChasePanel';
+import { DETAIL_PANEL_WIDTH } from '@/components/SpeciesDetailPanel';
 
 // ─── Tier colors for DivIcon HTML strings (CSS vars can't be used in html strings) ───
 const TIER_COLORS_LIGHT = {
@@ -86,10 +88,15 @@ function hotspotHeatColor(ratio: number): string {
   return lerpColor('#ff7043', '#ef4444', (ratio - 0.66) / 0.34);
 }
 
-// ─── Tier sort order ──────────────────────────────────────────────────────────
-const TIER_ORDER: Record<string, number> = { 'lifer-rare': 0, lifer: 1, rare: 2, seen: 3 };
-
 const noop = () => {};
+
+// Hover tooltips are pointer affordances. On touch, Leaflet's bindTooltip also
+// wires `click` to open the tooltip, which would race the click that opens the
+// detail panel — so touch devices get no tooltip at all.
+const canHover =
+  typeof window !== 'undefined' &&
+  typeof window.matchMedia === 'function' &&
+  window.matchMedia('(hover: hover) and (pointer: fine)').matches;
 
 // ─── Bird pin icon (teardrop SVG, anchored at tip) ────────────────────────────
 
@@ -235,13 +242,48 @@ function InitialLocationController({ location }: { location: [number, number] | 
 }
 
 // ─── MapClickHandler ──────────────────────────────────────────────────────────
+// Markers default to `bubblingMouseEvents: false`, so a click on a pin never
+// reaches the map — the dismiss below can't fight the selection above. Paths do
+// bubble, so clicking the search-radius circle dismisses, which is what we want.
 
-function MapClickHandler({ active, onMapClick }: { active: boolean; onMapClick: (lat: number, lng: number) => void }) {
+function MapClickHandler({
+  isPinMode,
+  onMapClick,
+  onDismiss,
+}: {
+  isPinMode: boolean;
+  onMapClick: (lat: number, lng: number) => void;
+  onDismiss: () => void;
+}) {
   useMapEvents({
     click(e) {
-      if (active) onMapClick(e.latlng.lat, e.latlng.lng);
+      if (isPinMode) onMapClick(e.latlng.lat, e.latlng.lng);
+      else onDismiss();
     },
   });
+  return null;
+}
+
+// ─── InvalidateSizeController ─────────────────────────────────────────────────
+// The detail panel overlays the map rather than resizing it, so nothing here
+// fires today. It exists so that any future layout that *does* resize the
+// container can't leave Leaflet rendering against stale dimensions.
+
+function InvalidateSizeController() {
+  const map = useMap();
+  useEffect(() => {
+    const container = map.getContainer();
+    let frame = 0;
+    const observer = new ResizeObserver(() => {
+      cancelAnimationFrame(frame);
+      frame = requestAnimationFrame(() => map.invalidateSize({ animate: false }));
+    });
+    observer.observe(container);
+    return () => {
+      cancelAnimationFrame(frame);
+      observer.disconnect();
+    };
+  }, [map]);
   return null;
 }
 
@@ -275,329 +317,90 @@ function MapController({ target }: { target: [number, number] | null }) {
   return null;
 }
 
-// ─── Observation Popup ────────────────────────────────────────────────────────
+// ─── Tooltip edge flipping ────────────────────────────────────────────────────
+// Leaflet's `direction: 'auto'` only picks left/right, and it picks from the map
+// *centre* rather than the viewport edge — so horizontal clipping is impossible,
+// but a pin within half a tooltip of the top or bottom edge still gets cut off.
+//
+// Rather than measure where Leaflet has already put the tooltip (which lags a
+// frame behind the content react-leaflet portals in), compute where it *would*
+// go from the marker's container point and the element's own size. That answer
+// doesn't depend on when Leaflet last repositioned anything.
+//
+// `offset` has to flip with the direction: Leaflet adds it after choosing the
+// direction, so a gap tuned for 'top' drags a 'bottom' tooltip up over its pin.
+// The 'top' offset also clears the tallest pin, because a marker's latlng sits at
+// the pin tip and the artwork extends upwards from there.
 
-function ObsPopup({
-  obs,
-  onAddToLifeList,
-  isOnLifeList,
-  lightMode,
-}: {
-  obs: ClassifiedObservation;
-  onAddToLifeList: (code: string, name: string, sciName?: string, date?: string, location?: string) => void;
-  isOnLifeList: boolean;
-  lightMode: boolean;
-}) {
-  const [showAddForm, setShowAddForm] = useState(false);
-  const [addDate, setAddDate] = useState('');
-  const [addLoc, setAddLoc] = useState('');
+const TOOLTIP_GAP_BELOW = 4;
+const TOOLTIP_GAP_ABOVE = -30;
 
-  const t = getTheme(lightMode);
-  const tc = tierTokens(obs.tier, t);
-  const label = tierLabel(obs.tier);
-  const chaseWorthwhile = obs.tier !== 'seen';
+function useTooltipEdgeFlip() {
+  const map = useMap();
 
-  function openForm() {
-    setAddDate(obs.obsDt.split(' ')[0]);
-    setAddLoc(obs.locName);
-    setShowAddForm(true);
-  }
+  return useMemo(() => ({
+    tooltipopen: (e: L.TooltipEvent) => {
+      const tooltip = e.tooltip;
+      const source = e.target as L.Marker;
+      // react-leaflet portals the children in on its own tooltipopen listener, so
+      // on the very first hover the element is still empty this tick.
+      requestAnimationFrame(() => {
+        const el = tooltip.getElement();
+        if (!el || !el.isConnected || !source.getLatLng) return;
 
-  function confirmAdd() {
-    onAddToLifeList(obs.speciesCode, obs.comName, obs.sciName, addDate, addLoc);
-    setShowAddForm(false);
-  }
+        const point = map.latLngToContainerPoint(source.getLatLng());
+        const size = map.getSize();
+        const w = el.offsetWidth;
+        const h = el.offsetHeight;
 
-  const inputStyle: React.CSSProperties = {
-    width: '100%', padding: '5px 8px',
-    background: t.bg2, border: `1px solid ${t.line2}`,
-    borderRadius: 5, color: t.fg0, fontSize: 12,
-    outline: 'none', boxSizing: 'border-box',
-    fontFamily: t.sans,
-  };
+        // 'auto' resolves to left/right, both vertically centred on the anchor.
+        const direction: L.Direction =
+          point.y - h / 2 < 0 ? 'bottom'
+          : point.y + h / 2 > size.y ? 'top'
+          : 'auto';
 
-  return (
-    <div style={{ fontFamily: t.sans, minWidth: 240, maxWidth: 300 }}>
-      {/* Tier badge */}
-      <div style={{ marginBottom: 7 }}>
-        <span style={{
-          fontSize: 9.5, fontWeight: 700, fontFamily: t.mono,
-          background: tc.bg, color: tc.color,
-          border: `1px solid ${tc.border}`,
-          borderRadius: 4, padding: '2px 6px', letterSpacing: '0.04em',
-        }}>{label}</span>
-      </div>
-
-      {/* Species name */}
-      <div style={{ fontSize: 15, fontWeight: 700, color: t.fg0, fontFamily: t.display, marginBottom: 2, lineHeight: 1.25 }}>
-        {obs.comName}
-      </div>
-      <div style={{ fontSize: 12, color: t.fg2, fontStyle: 'italic', marginBottom: 10 }}>
-        {obs.sciName}
-      </div>
-
-      {/* Sighting odds — will the bird still be there? (prominent, always shown) */}
-      {chaseWorthwhile && (
-        <div style={{ marginBottom: 12 }}>
-          <div style={{
-            fontSize: 9.5, fontWeight: 700, fontFamily: t.mono, color: t.fg3,
-            letterSpacing: '0.06em',
-          }}>
-            SIGHTING ODDS
-          </div>
-          <ChasePanel speciesCode={obs.speciesCode} lat={obs.lat} lng={obs.lng} lightMode={lightMode} />
-        </div>
-      )}
-
-      {/* Location + meta */}
-      <div style={{ fontSize: 12, color: t.fg2, marginBottom: 4, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-        {obs.locName}
-      </div>
-      <div style={{
-        display: 'flex', gap: 12, fontSize: 12, color: t.fg3,
-        fontFamily: t.mono,
-        marginBottom: obs.reportCount && obs.reportCount > 1 ? 4 : 12,
-      }}>
-        <span>{obs.howMany ? `${obs.howMany}×` : '1×'}</span>
-        <span>{timeAgo(obs.obsDt)}</span>
-      </div>
-      {obs.reportCount && obs.reportCount > 1 && (
-        <div style={{ fontSize: 11, color: t.fg3, fontFamily: t.mono, marginBottom: 12 }}>
-          Reported {obs.reportCount}× this week here
-        </div>
-      )}
-
-      {/* Add to life list */}
-      {!isOnLifeList ? (
-        !showAddForm ? (
-          <button
-            onClick={openForm}
-            style={{
-              width: '100%', padding: '7px 0',
-              background: t.accentBg, border: `1px solid ${t.accentBorder}`,
-              borderRadius: 6, color: t.accent,
-              fontSize: 12, fontWeight: 600, cursor: 'pointer',
-              fontFamily: t.sans,
-            }}
-          >
-            + Add to Life List
-          </button>
-        ) : (
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 5 }}>
-            <input type="date" value={addDate} onChange={e => setAddDate(e.target.value)} style={inputStyle}/>
-            <input type="text" value={addLoc} onChange={e => setAddLoc(e.target.value)} placeholder="Location" style={inputStyle}/>
-            <div style={{ display: 'flex', gap: 5 }}>
-              <button
-                onClick={confirmAdd}
-                style={{
-                  flex: 1, padding: '5px 0',
-                  background: t.accentBg, border: `1px solid ${t.accentBorder}`,
-                  borderRadius: 5, color: t.accent,
-                  fontSize: 11, fontWeight: 700, cursor: 'pointer', fontFamily: t.sans,
-                }}
-              >
-                ✓ Confirm
-              </button>
-              <button
-                onClick={() => setShowAddForm(false)}
-                style={{
-                  padding: '5px 10px',
-                  background: 'transparent', border: `1px solid ${t.line2}`,
-                  borderRadius: 5, color: t.fg2, fontSize: 11, cursor: 'pointer', fontFamily: t.sans,
-                }}
-              >
-                Cancel
-              </button>
-            </div>
-          </div>
-        )
-      ) : (
-        <div style={{ textAlign: 'center', fontSize: 11, color: t.accent, padding: '5px 0', fontFamily: t.mono }}>
-          ✓ On life list
-        </div>
-      )}
-    </div>
-  );
-}
-
-// ─── Multi-obs popup ──────────────────────────────────────────────────────────
-
-function MultiObsPopup({
-  observations,
-  onAddToLifeList,
-  lifeSet,
-  lightMode,
-  focusedCode,
-}: {
-  observations: ClassifiedObservation[];
-  onAddToLifeList: (code: string, name: string, sciName?: string, date?: string, location?: string) => void;
-  lifeSet: Set<string>;
-  lightMode: boolean;
-  focusedCode: string | null;
-}) {
-  // Focused species first. Done here rather than in the marker grouping memo so
-  // that focusing a species in the sidebar doesn't hand every marker a brand new
-  // array and force ~400 re-renders — popup content only mounts when it's open.
-  const ordered = useMemo(() => {
-    if (!focusedCode || !observations.some(o => o.speciesCode === focusedCode)) return observations;
-    return [...observations].sort((a, b) => {
-      const aFoc = a.speciesCode === focusedCode ? -1 : 0;
-      const bFoc = b.speciesCode === focusedCode ? -1 : 0;
-      return aFoc - bFoc;
-    });
-  }, [observations, focusedCode]);
-
-  const [index, setIndex] = useState(0);
-  const safeIndex = Math.min(index, ordered.length - 1);
-  const obs = ordered[safeIndex];
-  const t = getTheme(lightMode);
-
-  return (
-    <div>
-      {ordered.length > 1 && (
-        <div style={{
-          display: 'flex', alignItems: 'center', justifyContent: 'space-between',
-          marginBottom: 10,
-          background: t.bg2, border: `1px solid ${t.line2}`,
-          borderRadius: 5, padding: '3px 6px',
-        }}>
-          <button
-            onClick={() => setIndex(i => Math.max(0, i - 1))}
-            disabled={safeIndex === 0}
-            style={{
-              background: 'none', border: 'none',
-              cursor: safeIndex === 0 ? 'default' : 'pointer',
-              color: safeIndex === 0 ? t.fg4 : t.accent,
-              fontSize: 18, fontWeight: 700, padding: '0 4px', lineHeight: 1,
-              opacity: safeIndex === 0 ? 0.3 : 1,
-            }}
-          >‹</button>
-          <span style={{ fontSize: 10, color: t.fg3, fontFamily: t.mono, letterSpacing: '0.06em' }}>
-            {safeIndex + 1} / {ordered.length} species here
-          </span>
-          <button
-            onClick={() => setIndex(i => Math.min(ordered.length - 1, i + 1))}
-            disabled={safeIndex === ordered.length - 1}
-            style={{
-              background: 'none', border: 'none',
-              cursor: safeIndex === ordered.length - 1 ? 'default' : 'pointer',
-              color: safeIndex === ordered.length - 1 ? t.fg4 : t.accent,
-              fontSize: 18, fontWeight: 700, padding: '0 4px', lineHeight: 1,
-              opacity: safeIndex === ordered.length - 1 ? 0.3 : 1,
-            }}
-          >›</button>
-        </div>
-      )}
-      <ObsPopup
-        key={obs.speciesCode}
-        obs={obs}
-        onAddToLifeList={onAddToLifeList}
-        isOnLifeList={lifeSet.has(obs.speciesCode)}
-        lightMode={lightMode}
-      />
-    </div>
-  );
-}
-
-// ─── Hover-to-open marker ─────────────────────────────────────────────────────
-// On hover-capable pointers, hovering a bird pin opens its card (with a short
-// intent delay so skimming across pins doesn't fire fetches), and the card stays
-// open long enough to move onto it and click. Touch devices are unaffected — the
-// default tap-to-open behavior remains.
-const canHover =
-  typeof window !== 'undefined' &&
-  typeof window.matchMedia === 'function' &&
-  window.matchMedia('(hover: hover) and (pointer: fine)').matches;
-
-function HoverMarker({ position, icon, opacity, children }: {
-  position: [number, number];
-  icon: L.DivIcon;
-  opacity: number;
-  children: React.ReactNode;
-}) {
-  const markerRef = useRef<L.Marker>(null);
-  const openTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const closeTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const popupElRef = useRef<HTMLElement | null>(null);
-
-  const cancelOpen = useCallback(() => {
-    if (openTimer.current) { clearTimeout(openTimer.current); openTimer.current = null; }
-  }, []);
-  const cancelClose = useCallback(() => {
-    if (closeTimer.current) { clearTimeout(closeTimer.current); closeTimer.current = null; }
-  }, []);
-  const scheduleClose = useCallback(() => {
-    cancelClose();
-    closeTimer.current = setTimeout(() => {
-      closeTimer.current = null;
-      markerRef.current?.closePopup();
-    }, 260);
-  }, [cancelClose]);
-
-  // Stable references so the popup DOM listeners we add on open are the exact
-  // ones we remove on close.
-  const onPopupEnter = useCallback(() => cancelClose(), [cancelClose]);
-  const onPopupLeave = useCallback(() => scheduleClose(), [scheduleClose]);
-
-  useEffect(() => () => { cancelOpen(); cancelClose(); }, [cancelOpen, cancelClose]);
-
-  const eventHandlers = useMemo(() => {
-    if (!canHover) return undefined;
-    return {
-      mouseover: () => {
-        cancelClose();
-        if (openTimer.current) return;
-        openTimer.current = setTimeout(() => {
-          openTimer.current = null;
-          markerRef.current?.openPopup();
-        }, 130);
-      },
-      mouseout: () => {
-        cancelOpen();
-        scheduleClose();
-      },
-      popupopen: (e: L.PopupEvent) => {
-        const el = e.popup.getElement() as HTMLElement | null;
-        if (!el) return;
-        popupElRef.current = el;
-        el.addEventListener('mouseenter', onPopupEnter);
-        el.addEventListener('mouseleave', onPopupLeave);
-      },
-      popupclose: () => {
-        const el = popupElRef.current;
-        if (el) {
-          el.removeEventListener('mouseenter', onPopupEnter);
-          el.removeEventListener('mouseleave', onPopupLeave);
-          popupElRef.current = null;
+        // A vertical flip centres the tooltip horizontally on the pin, which can
+        // clip in a corner — nudge it back inside by however much it overhangs.
+        let dx = 0;
+        if (direction !== 'auto') {
+          dx = Math.max(0, w / 2 - point.x) - Math.max(0, point.x + w / 2 - size.x);
         }
-        cancelOpen();
-        cancelClose();
-      },
-    };
-  }, [cancelClose, cancelOpen, scheduleClose, onPopupEnter, onPopupLeave]);
+        const dy = direction === 'bottom' ? TOOLTIP_GAP_BELOW
+          : direction === 'top' ? TOOLTIP_GAP_ABOVE
+          : 0;
 
-  return (
-    <Marker
-      ref={markerRef}
-      position={position}
-      icon={icon}
-      opacity={opacity}
-      eventHandlers={eventHandlers}
-    >
-      <Popup className="bird-popup">{children}</Popup>
-    </Marker>
-  );
+        const offset = tooltip.options.offset as L.Point | undefined;
+        if (tooltip.options.direction === direction && offset?.x === dx && offset?.y === dy) return;
+
+        tooltip.options.direction = direction;
+        tooltip.options.offset = L.point(dx, dy);
+        // Safe on a Tooltip: unlike Popup, its _adjustPan is a no-op, so this
+        // repositions without yanking the map out from under the cursor.
+        tooltip.update();
+      });
+    },
+    tooltipclose: (e: L.TooltipEvent) => {
+      // Re-measure from neutral next time rather than inheriting the last flip.
+      e.tooltip.options.direction = 'auto';
+      e.tooltip.options.offset = L.point(0, 0);
+    },
+  }), [map]);
 }
 
 // ─── Bird pin marker (memoized) ───────────────────────────────────────────────
-// Takes primitives only, so React.memo actually holds: the parent can re-render
-// freely without touching ~400 Leaflet markers. The position tuple is memoized
-// because react-leaflet compares it by identity and calls setLatLng() on every
-// change — a fresh array literal each render meant every marker was repositioned
-// on every render, which clobbers Leaflet's in-flight zoom-animation transform
-// and makes the pins visibly drift away from the tiles mid-zoom.
+// Hover shows a cheap tooltip; click opens the species detail panel. There is no
+// Popup bound to these markers at all, which is what stops Leaflet's built-in
+// click-toggles-the-popup behaviour from closing the card hover had just opened.
+//
+// Takes primitives and stable references only, so React.memo actually holds: the
+// parent can re-render freely without touching ~400 Leaflet markers. The position
+// tuple is memoized because react-leaflet compares it by identity and calls
+// setLatLng() on every change — a fresh array literal each render meant every
+// marker was repositioned on every render, which clobbers Leaflet's in-flight
+// zoom-animation transform and makes the pins visibly drift from the tiles.
 
 interface BirdPinMarkerProps {
+  locKey: string;
   lat: number;
   lng: number;
   tier: ClassifiedObservation['tier'];
@@ -605,13 +408,13 @@ interface BirdPinMarkerProps {
   focused: boolean;
   lightMode: boolean;
   opacity: number;
+  showTooltip: boolean;
   group: ClassifiedObservation[];
-  lifeSet: Set<string>;
-  focusedCode: string | null;
-  onAddToLifeList: (code: string, name: string, sciName?: string, date?: string, location?: string) => void;
+  onSelect: (locKey: string) => void;
 }
 
 const BirdPinMarker = memo(function BirdPinMarker({
+  locKey,
   lat,
   lng,
   tier,
@@ -619,10 +422,9 @@ const BirdPinMarker = memo(function BirdPinMarker({
   focused,
   lightMode,
   opacity,
+  showTooltip,
   group,
-  lifeSet,
-  focusedCode,
-  onAddToLifeList,
+  onSelect,
 }: BirdPinMarkerProps) {
   const position = useMemo<[number, number]>(() => [lat, lng], [lat, lng]);
   const icon = useMemo(
@@ -630,86 +432,75 @@ const BirdPinMarker = memo(function BirdPinMarker({
     [tier, pulse, focused, lightMode]
   );
 
+  const tooltipHandlers = useTooltipEdgeFlip();
+  // Memoized, not an inline literal: react-leaflet compares the handlers object by
+  // reference and does a full off/on cycle when it changes. Focusing a species in
+  // the sidebar changes `opacity` on nearly every pin, so a literal here would mean
+  // thousands of listener rebinds per sidebar click.
+  const eventHandlers = useMemo(() => ({
+    ...tooltipHandlers,
+    click: (e: L.LeafletMouseEvent) => {
+      // The cursor is still over the pin when the panel opens, and Leaflet only
+      // closes a tooltip on mouseout — so it would otherwise hang around.
+      (e.target as L.Marker).closeTooltip();
+      onSelect(locKey);
+    },
+  }), [tooltipHandlers, onSelect, locKey]);
+
+  const rep = group[0];
+
   return (
-    <HoverMarker position={position} icon={icon} opacity={opacity}>
-      <MultiObsPopup
-        observations={group}
-        onAddToLifeList={onAddToLifeList}
-        lifeSet={lifeSet}
-        lightMode={lightMode}
-        focusedCode={focusedCode}
-      />
-    </HoverMarker>
+    <Marker position={position} icon={icon} opacity={opacity} eventHandlers={eventHandlers}>
+      {showTooltip && (
+        <Tooltip direction="auto" offset={[0, 0]} opacity={1} className="bird-tooltip">
+          <span className="bird-tooltip-name">{rep.comName}</span>
+          <span className="bird-tooltip-meta">
+            {timeAgo(rep.obsDt)}
+            {group.length > 1 && ` · +${group.length - 1} more`}
+          </span>
+        </Tooltip>
+      )}
+    </Marker>
   );
 });
 
-// ─── Hotspot Popup ────────────────────────────────────────────────────────────
-
-function HotspotPopupContent({
-  hs,
-  onMoreInfo,
-  lightMode,
-}: {
-  hs: Hotspot;
-  onMoreInfo: (hs: Hotspot) => void;
-  lightMode: boolean;
-}) {
-  const t = getTheme(lightMode);
-
-  return (
-    <div style={{ fontFamily: t.sans, minWidth: 190 }}>
-      <div style={{ fontSize: 13, fontWeight: 700, color: t.fg0, fontFamily: t.display, marginBottom: 5, lineHeight: 1.3 }}>
-        {hs.locName}
-      </div>
-      {hs.numSpeciesAllTime > 0 && (
-        <div style={{ fontSize: 12, color: t.fg3, fontFamily: t.mono, marginBottom: 8 }}>
-          {hs.numSpeciesAllTime} species all time
-        </div>
-      )}
-      {hs.latestObsDt && (
-        <div style={{ fontSize: 11, color: t.fg3, marginBottom: 8 }}>
-          Last obs: {timeAgo(hs.latestObsDt)}
-        </div>
-      )}
-      <button
-        onClick={() => onMoreInfo(hs)}
-        style={{
-          width: '100%', padding: '6px 0',
-          background: t.accentBg, border: `1px solid ${t.accentBorder}`,
-          borderRadius: 6, color: t.accent,
-          fontSize: 12, fontWeight: 600, cursor: 'pointer', fontFamily: t.sans,
-        }}
-      >
-        More Info →
-      </button>
-      <div style={{ fontSize: 10, color: t.fg4, marginTop: 4, textAlign: 'center', fontFamily: t.mono }}>
-        {hs.locId}
-      </div>
-    </div>
-  );
-}
-
 // ─── Hotspot marker (memoized) ────────────────────────────────────────────────
+// Same contract as the bird pins: hover previews, click opens the detail panel —
+// here the existing HotspotPanel in the sidebar, with no popup in between.
 
 const HotspotMarker = memo(function HotspotMarker({
   hs,
   ratio,
-  lightMode,
+  showTooltip,
   onMoreInfo,
 }: {
   hs: Hotspot;
   ratio: number;
-  lightMode: boolean;
+  showTooltip: boolean;
   onMoreInfo: (hs: Hotspot) => void;
 }) {
   const position = useMemo<[number, number]>(() => [hs.lat, hs.lng], [hs.lat, hs.lng]);
   const icon = useMemo(() => hotspotIcon(ratio), [ratio]);
 
+  const tooltipHandlers = useTooltipEdgeFlip();
+  const eventHandlers = useMemo(() => ({
+    ...tooltipHandlers,
+    click: (e: L.LeafletMouseEvent) => {
+      (e.target as L.Marker).closeTooltip();
+      onMoreInfo(hs);
+    },
+  }), [tooltipHandlers, onMoreInfo, hs]);
+
   return (
-    <Marker position={position} icon={icon}>
-      <Popup className="bird-popup">
-        <HotspotPopupContent hs={hs} onMoreInfo={onMoreInfo} lightMode={lightMode} />
-      </Popup>
+    <Marker position={position} icon={icon} eventHandlers={eventHandlers}>
+      {showTooltip && (
+        <Tooltip direction="auto" offset={[0, 0]} opacity={1} className="bird-tooltip">
+          <span className="bird-tooltip-name">{hs.locName}</span>
+          {hs.numSpeciesAllTime > 0 && (
+            <span className="bird-tooltip-meta">{hs.numSpeciesAllTime} species all time</span>
+          )}
+        </Tooltip>
+      )}
     </Marker>
   );
 });
@@ -717,20 +508,29 @@ const HotspotMarker = memo(function HotspotMarker({
 // ─── Main Map component ───────────────────────────────────────────────────────
 
 export interface MapProps {
-  center: [number, number];
+  /** Single source of truth for where we're searching: dropped pin, else GPS/default. */
+  searchCenter: [number, number];
+  /** Radius actually queried, in km. A dropped pin overrides the setting, and the
+   *  circle has to say so — it used to keep drawing the settings radius. */
+  searchRadiusKm: number;
   observations: ClassifiedObservation[];
+  /** Pre-grouped by location in app/page.tsx, so markers and the detail panel
+   *  resolve the same locKey to the same observations. */
+  markerGroups: MarkerGroup[];
   hotspots: Hotspot[];
   flyToTarget: [number, number] | null;
   settings: AppSettings;
-  lifeList: string[];
   pinLocation: [number, number] | null;
   userLocation: [number, number] | null;
   focusedSpecies: { code: string; name: string } | null;
+  /** locKey of the sighting whose detail panel is open, if any. */
+  selectedLocKey: string | null;
   isMobile?: boolean;
   loading?: boolean;
   /** Low battery mode — suppresses marker pulse/glow and expensive filters. */
   lowFi?: boolean;
-  onAddToLifeList: (code: string, name: string, sciName?: string, date?: string, location?: string) => void;
+  onSelectSighting: (locKey: string) => void;
+  onCloseDetail: () => void;
   onHotspotDetail: (hs: Hotspot) => void;
   onPinDrop: (lat: number, lng: number) => void;
   onClearPin: () => void;
@@ -738,19 +538,22 @@ export interface MapProps {
 }
 
 export default function BirdMap({
-  center,
+  searchCenter,
+  searchRadiusKm,
   observations,
+  markerGroups,
   hotspots,
   flyToTarget,
   settings,
-  lifeList,
   pinLocation,
   userLocation,
   focusedSpecies,
+  selectedLocKey,
   isMobile,
   loading,
   lowFi = false,
-  onAddToLifeList,
+  onSelectSighting,
+  onCloseDetail,
   onHotspotDetail,
   onPinDrop,
   onClearPin,
@@ -761,7 +564,8 @@ export default function BirdMap({
 
   // The page re-creates its handler props on every render. Freeze their identity
   // here so the memoized markers below actually stay memoized.
-  const addToLifeList = useStableCallback(onAddToLifeList);
+  const selectSighting = useStableCallback(onSelectSighting);
+  const closeDetail = useStableCallback(onCloseDetail);
   const hotspotDetail = useStableCallback(onHotspotDetail);
   const clearPin = useStableCallback(onClearPin);
   const stableRefresh = useStableCallback(onRefreshNow ?? noop);
@@ -770,7 +574,10 @@ export default function BirdMap({
   const togglePinMode = useCallback(() => setIsPinMode(v => !v), []);
   const reCenter = useCallback(() => setReCenterTrigger(n => n + 1), []);
 
-  const reCenterTarget = useMemo<[number, number]>(() => userLocation ?? center, [userLocation, center]);
+  const reCenterTarget = useMemo<[number, number]>(
+    () => userLocation ?? searchCenter,
+    [userLocation, searchCenter]
+  );
   const theme = getTheme(settings.lightMode);
 
   const pinDrop = useStableCallback(onPinDrop);
@@ -779,17 +586,9 @@ export default function BirdMap({
     setIsPinMode(false);
   }, [pinDrop]);
 
-  const lifeSet = useMemo(() => new Set(lifeList), [lifeList]);
   const { lightMode } = settings;
   const focusedCode = focusedSpecies?.code ?? null;
   const pulseEnabled = settings.liferPulse && !lowFi;
-
-  const visibleObs = useMemo(
-    () => settings.dimSeenSpecies
-      ? observations
-      : observations.filter(o => o.tier !== 'seen' && o.tier !== 'rare'),
-    [observations, settings.dimSeenSpecies]
-  );
 
   const { getHotspotHeat, maxHeat } = useMemo(() => {
     const hotspotRecentSpecies = new Map<string, Set<string>>();
@@ -805,25 +604,6 @@ export default function BirdMap({
     return { getHotspotHeat, maxHeat };
   }, [observations, hotspots]);
 
-  // Group observations by location, sorted by tier priority. Deliberately does
-  // NOT depend on focusedSpecies: doing so would hand every marker a brand new
-  // group array whenever the sidebar focus changed. Focused-first ordering now
-  // happens inside MultiObsPopup, which only mounts when a card is open.
-  const markerGroups = useMemo(() => {
-    const groups = new Map<string, ClassifiedObservation[]>();
-    for (const obs of visibleObs) {
-      // Fall back to coordinates, not locName — two distinct points sharing a
-      // name would otherwise collide onto one marker (and one React key).
-      const key = obs.locId || `${obs.lat},${obs.lng}`;
-      if (!groups.has(key)) groups.set(key, []);
-      groups.get(key)!.push(obs);
-    }
-    for (const group of groups.values()) {
-      group.sort((a, b) => TIER_ORDER[a.tier] - TIER_ORDER[b.tier]);
-    }
-    return Array.from(groups.entries());
-  }, [visibleObs]);
-
   const tileUrl = lightMode
     ? 'https://tiles.stadiamaps.com/tiles/alidade_smooth/{z}/{x}/{y}.png'
     : 'https://tiles.stadiamaps.com/tiles/alidade_smooth_dark/{z}/{x}/{y}.png';
@@ -833,7 +613,7 @@ export default function BirdMap({
   return (
     <div className={lightMode ? '' : 'dark'} style={{ position: 'relative', height: '100%', width: '100%' }}>
       <MapContainer
-        center={center}
+        center={searchCenter}
         zoom={11}
         minZoom={3}
         maxZoom={18}
@@ -866,13 +646,14 @@ export default function BirdMap({
         <MapController target={flyToTarget} />
         <RecenterController target={reCenterTarget} trigger={reCenterTrigger} />
         <InitialLocationController location={userLocation} />
-        <MapClickHandler active={isPinMode} onMapClick={handleMapClick} />
+        <MapClickHandler isPinMode={isPinMode} onMapClick={handleMapClick} onDismiss={closeDetail} />
         <CursorController isPinMode={isPinMode} />
+        <InvalidateSizeController />
 
         {settings.showRadiusCircle && (
           <Circle
-            center={pinLocation ?? center}
-            radius={settings.searchRadius * 1000}
+            center={searchCenter}
+            radius={searchRadiusKm * 1000}
             pathOptions={{
               color: theme.accent,
               weight: 1.5,
@@ -890,7 +671,7 @@ export default function BirdMap({
               key={hs.locId}
               hs={hs}
               ratio={Math.min(getHotspotHeat(hs) / maxHeat, 1)}
-              lightMode={lightMode}
+              showTooltip={canHover}
               onMoreInfo={hotspotDetail}
             />
           ))}
@@ -898,13 +679,16 @@ export default function BirdMap({
         {/* Bird sighting pin markers — grouped by location */}
         {markerGroups.map(([locKey, group]) => {
           const repObs = group[0];
-          const isFocused = !!(focusedCode && group.some(o => o.speciesCode === focusedCode));
+          const isFocused =
+            locKey === selectedLocKey ||
+            !!(focusedCode && group.some(o => o.speciesCode === focusedCode));
           const isSeenTier = repObs.tier === 'seen' || repObs.tier === 'rare';
           const baseOpacity = isSeenTier && settings.dimSeenSpecies ? 0.3 : 1;
           const focusOpacity = focusedCode && !isFocused ? 0.18 : 1;
           return (
             <BirdPinMarker
               key={locKey}
+              locKey={locKey}
               lat={repObs.lat}
               lng={repObs.lng}
               tier={repObs.tier}
@@ -912,10 +696,9 @@ export default function BirdMap({
               focused={isFocused}
               lightMode={lightMode}
               opacity={baseOpacity * focusOpacity}
+              showTooltip={canHover}
               group={group}
-              lifeSet={lifeSet}
-              focusedCode={focusedCode}
-              onAddToLifeList={addToLifeList}
+              onSelect={selectSighting}
             />
           );
         })}
@@ -940,7 +723,7 @@ export default function BirdMap({
                   Custom Search Pin
                 </div>
                 <div style={{ fontSize: 11, color: theme.fg3, marginBottom: 10, fontFamily: theme.mono }}>
-                  Searching up to 50 km from this point
+                  Searching up to {searchRadiusKm} km from this point
                 </div>
                 <button
                   onClick={clearPin}
@@ -965,6 +748,7 @@ export default function BirdMap({
         isMobile={!!isMobile}
         loading={!!loading}
         lowFi={lowFi}
+        detailOpen={!!selectedLocKey}
         isPinMode={isPinMode}
         hasUserLocation={!!userLocation}
         hasPin={!!pinLocation}
@@ -986,6 +770,7 @@ const MapControls = memo(function MapControls({
   isMobile,
   loading,
   lowFi,
+  detailOpen,
   isPinMode,
   hasUserLocation,
   hasPin,
@@ -998,6 +783,8 @@ const MapControls = memo(function MapControls({
   isMobile: boolean;
   loading: boolean;
   lowFi: boolean;
+  /** Desktop detail panel is open — slide the controls clear of it. */
+  detailOpen: boolean;
   isPinMode: boolean;
   hasUserLocation: boolean;
   hasPin: boolean;
@@ -1024,9 +811,12 @@ const MapControls = memo(function MapControls({
     <div style={{
       position: 'absolute',
       bottom: isMobile ? 86 : 30,
-      right: 10,
+      // On mobile the detail sheet covers these the way the sidebar drawer already
+      // does; on desktop the panel is a fixed-width column, so step aside instead.
+      right: !isMobile && detailOpen ? DETAIL_PANEL_WIDTH + 10 : 10,
       zIndex: 1001,
       display: 'flex', flexDirection: 'column', gap: 6, alignItems: 'flex-end',
+      transition: lowFi ? undefined : 'right 0.24s cubic-bezier(0.32, 0.72, 0, 1)',
     }}>
       {/* Refresh */}
       {onRefreshNow && (

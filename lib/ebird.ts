@@ -91,18 +91,32 @@ export function fmtDist(km: number, useMetric = true): string {
 }
 
 /**
- * Parse an eBird obsDt string ("YYYY-MM-DD HH:mm").
+ * Parse an eBird obsDt string ("YYYY-MM-DD HH:mm", or "YYYY-MM-DD" on checklists
+ * submitted without a time).
+ *
  * The space-separated format is not parseable by Safari/iOS `new Date()` —
  * always go through here instead of calling `new Date(obsDt)` directly.
+ *
+ * The two forms are also parsed differently by the spec: a date-*time* with no
+ * offset is local, but a date-*only* string is UTC midnight. Left alone, a
+ * time-less observation lands on the previous calendar day everywhere west of
+ * Greenwich, which is exactly where it shows up as an off-by-one bar on the
+ * sightings graph. Pin those to local midnight so both forms agree.
+ *
+ * Returns an Invalid Date for malformed input; callers that bucket by date must
+ * check `isNaN(getTime())` rather than letting NaN reach an array index.
  */
 export function parseObsDt(dateStr: string): Date {
-  return new Date(dateStr.replace(' ', 'T'));
+  const s = (dateStr ?? '').trim().replace(' ', 'T');
+  if (!s) return new Date(NaN);
+  return new Date(s.length <= 10 ? `${s}T00:00` : s);
 }
 
 export function timeAgo(dateStr: string): string {
   const date = parseObsDt(dateStr);
   const now = new Date();
   const diffMs = now.getTime() - date.getTime();
+  if (isNaN(diffMs)) return 'unknown';
   const diffMins = Math.floor(diffMs / 60000);
   const diffHours = Math.floor(diffMins / 60);
   const diffDays = Math.floor(diffHours / 24);
