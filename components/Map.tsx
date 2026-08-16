@@ -18,6 +18,7 @@ import type { AppSettings } from '@/lib/ebird';
 import { timeAgo } from '@/lib/ebird';
 import type { MarkerGroup } from '@/lib/markers';
 import { getTheme, type Theme } from '@/lib/theme';
+import { getTileLayer } from '@/lib/tiles';
 import { useStableCallback } from '@/hooks/useStableCallback';
 import { RefreshCwIcon, CrosshairIcon, MapPinIcon, XIcon } from '@/components/Icons';
 import { DETAIL_PANEL_WIDTH } from '@/components/SpeciesDetailPanel';
@@ -604,11 +605,12 @@ export default function BirdMap({
     return { getHotspotHeat, maxHeat };
   }, [observations, hotspots]);
 
-  const tileUrl = lightMode
-    ? 'https://tiles.stadiamaps.com/tiles/alidade_smooth/{z}/{x}/{y}.png'
-    : 'https://tiles.stadiamaps.com/tiles/alidade_smooth_dark/{z}/{x}/{y}.png';
-
-  const tileAttrib = '&copy; <a href="https://stadiamaps.com/">Stadia Maps</a> &copy; <a href="https://openmaptiles.org/">OpenMapTiles</a> &copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>';
+  // Memoized so the object identity only changes with the theme — same rule as
+  // the marker props below: primitives and stable references only.
+  const { url: tileUrl, attribution: tileAttrib } = useMemo(
+    () => getTileLayer(lightMode),
+    [lightMode]
+  );
 
   return (
     <div className={lightMode ? '' : 'dark'} style={{ position: 'relative', height: '100%', width: '100%' }}>
