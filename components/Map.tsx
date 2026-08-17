@@ -61,6 +61,41 @@ const MAX_HOTSPOT_MARKERS = 150;
  *  the edge of the screen. */
 const HOTSPOT_VIEWPORT_PAD = 0.25;
 
+// ─── World bounds and the zoom floor ─────────────────────────────────────────
+// Leaflet's defaults let the view leave the only world copy that has anything in
+// it, which produced two separate user-visible bugs (fixes/ind_bugfix_A.md):
+//
+//   1. Nothing constrained panning, so the world could be dragged off the top or
+//      bottom of the viewport — and past ±85.05° there are no tiles at any zoom,
+//      so what shows is the flat `.leaflet-container` background.
+//   2. A TileLayer wraps horizontally by default; Marker and Circle do not. Both
+//      project one longitude, so every repeat of the basemap past ±180 is a
+//      correct-looking map with zero markers, hotspots and circles on it.
+//
+// `maxBounds` + `maxBoundsViscosity: 1` fixes both, but only once the world is
+// guaranteed to be at least as large as the viewport — otherwise `_limitCenter`
+// just centres a too-small world and the background frames it on all four sides.
+// That is what the derived minimum zoom below is for.
+
+/** Web Mercator's latitude cutoff. No tile exists beyond it at any zoom, so this
+ *  is where the world's north and south edges are — not ±90. */
+const MERCATOR_MAX_LAT = 85.0511287798;
+
+/** The one world copy the overlays actually live in. */
+const WORLD_BOUNDS: L.LatLngBoundsLiteral = [
+  [-MERCATOR_MAX_LAT, -180],
+  [MERCATOR_MAX_LAT, 180],
+];
+
+/** Floor for the derived minimum zoom — below this the map is useless anyway. */
+const BASE_MIN_ZOOM = 3;
+
+/** Zoom step. The derived floor has to land on a real stop, so this is shared
+ *  with `zoomSnap` / `zoomDelta` on the MapContainer rather than duplicated —
+ *  a floor between two stops would be unreachable and the map would sit one
+ *  step further in than it needs to. */
+const ZOOM_SNAP = 0.5;
+
 // Hover tooltips are pointer affordances. On touch, Leaflet's bindTooltip also
 // wires `click` to open the tooltip, which would race the click that opens the
 // detail panel — so touch devices get no tooltip at all.
@@ -214,19 +249,58 @@ function MapClickHandler({
   return null;
 }
 
-// ─── InvalidateSizeController ─────────────────────────────────────────────────
-// The detail panel overlays the map rather than resizing it, so nothing here
-// fires today. It exists so that any future layout that *does* resize the
-// container can't leave Leaflet rendering against stale dimensions.
+// ─── ViewportFitController ────────────────────────────────────────────────────
+// Was InvalidateSizeController. phaseB_rationale.md §9 kept that around as
+// insurance for a future layout that resizes the container rather than overlaying
+// it; this is that insurance being cashed in, because the zoom floor is a function
+// of the container size and has to be recomputed whenever it changes.
+//
+// Both jobs share one ResizeObserver on purpose, and the order inside the frame is
+// load-bearing: `getSize()` has to be read after `invalidateSize()` has refreshed
+// Leaflet's cached dimensions, or the floor is computed from the previous layout.
+//
+// A window resize is the only event that can change the answer, and ResizeObserver
+// fires once on observe(), so the floor is also correct at mount.
 
-function InvalidateSizeController() {
+function ViewportFitController() {
   const map = useMap();
   useEffect(() => {
     const container = map.getContainer();
     let frame = 0;
+
+    const fit = () => {
+      map.invalidateSize({ animate: false });
+
+      const size = map.getSize();
+      // Leaflet always assigns a CRS; the fallback is only here because the option
+      // is typed optional.
+      const crs = map.options.crs ?? L.CRS.EPSG3857;
+
+      // The world is a crs.scale(0) px square at zoom 0, so the smallest zoom at
+      // which it still covers the viewport is log2(need / that). getScaleZoom does
+      // the log through the CRS instead of hard-coding 256 here.
+      //
+      // Deliberately NOT `getBoundsZoom(WORLD_BOUNDS, true)`: that clamps its
+      // result with `Math.max(this.getMinZoom(), …)` (leaflet-src.js, Map#
+      // getBoundsZoom), so once we have raised the floor to 4 on a wide window it
+      // can never return anything lower again — shrinking the window back would
+      // leave the map stuck over-zoomed. getScaleZoom has no such feedback loop.
+      const fitZoom = map.getScaleZoom(Math.max(size.x, size.y) / crs.scale(0), 0);
+
+      // Round up to a real zoom stop. The epsilon keeps float noise
+      // (2.9999999999999996 for a viewport that fits exactly) from pushing the
+      // floor a whole step further in than the geometry requires.
+      const snapped = Math.ceil(fitZoom / ZOOM_SNAP - 1e-9) * ZOOM_SNAP;
+      const next = Math.max(BASE_MIN_ZOOM, snapped);
+
+      // setMinZoom fires zoomlevelschange and pulls the current zoom up itself if
+      // it now sits below the floor, so there is nothing else to do here.
+      if (next !== map.getMinZoom()) map.setMinZoom(next);
+    };
+
     const observer = new ResizeObserver(() => {
       cancelAnimationFrame(frame);
-      frame = requestAnimationFrame(() => map.invalidateSize({ animate: false }));
+      frame = requestAnimationFrame(fit);
     });
     observer.observe(container);
     return () => {
@@ -740,8 +814,18 @@ export default function BirdMap({
       <MapContainer
         center={searchCenter}
         zoom={11}
-        minZoom={3}
+        // Floor only — ViewportFitController raises it whenever the container is
+        // larger than the world at this zoom. See the world-bounds block up top.
+        minZoom={BASE_MIN_ZOOM}
         maxZoom={18}
+        // The view may never leave the world copy the overlays live in. Viscosity
+        // 1 makes that a hard wall rather than a rubber band: data is scoped to a
+        // ≤50 km radius around searchCenter (app/page.tsx), so there is nothing
+        // out there to bounce toward and a firm stop is the clearer signal.
+        // Static values, so plain props are right — react-leaflet hands these to
+        // L.map() at mount.
+        maxBounds={WORLD_BOUNDS}
+        maxBoundsViscosity={1.0}
         // No background here: react-leaflet freezes the container div's style at
         // mount (`const [props] = useState({ className, id, style })`), so an
         // inline colour would stay stuck on whichever theme was active on load.
@@ -752,8 +836,8 @@ export default function BirdMap({
         // renders in Settings → Credits instead, which is what keeps this
         // compliant with their terms. See lib/tiles.ts.
         attributionControl={false}
-        zoomSnap={0.5}
-        zoomDelta={0.5}
+        zoomSnap={ZOOM_SNAP}
+        zoomDelta={ZOOM_SNAP}
         wheelPxPerZoomLevel={120}
         inertia
         inertiaDeceleration={2500}
@@ -765,9 +849,19 @@ export default function BirdMap({
           url={tileUrl}
           attribution={tileAttrib}
           maxZoom={20}
-          // Keep a wider ring of off-screen tiles so zooming out doesn't expose
-          // the empty container background. Costs no extra requests — it only
-          // stops Leaflet from pruning tiles it already has.
+          // Keep a wider ring of off-screen tiles so a zoom or pan doesn't have to
+          // re-request what it just pruned. Costs no extra requests — it only stops
+          // Leaflet from discarding tiles it already has.
+          //
+          // This is not what keeps the container background off screen: keepBuffer
+          // can only retain tiles that exist, and past ±85.05° none do at any zoom.
+          // maxBounds and the derived minZoom own that — see the block up top.
+          //
+          // `noWrap` is deliberately left at its default (false). maxBounds means a
+          // world copy is unreachable anyway, and wrapped tiles still fill the ±180
+          // seam during zoom-animation frames. They cost nothing: GridLayer wraps
+          // the tile x back into range, so the URLs are the home copy's and come
+          // from cache. Setting noWrap would paint background at the seam instead.
           keepBuffer={4}
           updateWhenZooming={false}
         />
@@ -777,7 +871,7 @@ export default function BirdMap({
         <InitialLocationController location={userLocation} />
         <MapClickHandler isPinMode={isPinMode} onMapClick={handleMapClick} onDismiss={closeDetail} />
         <CursorController isPinMode={isPinMode} />
-        <InvalidateSizeController />
+        <ViewportFitController />
 
         {settings.showRadiusCircle && (
           <Circle
