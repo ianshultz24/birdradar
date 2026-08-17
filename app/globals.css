@@ -42,13 +42,18 @@ body {
 .bird-pulse-blue  { animation: liferPulse 2.2s ease-in-out infinite; }
 .bird-pulse-white { animation: rarePulse  2.2s ease-in-out infinite; }
 
-/* Pin marker pulse — uses CSS variables for per-tier glow colors */
-@keyframes pinBobPulse {
-  0%, 100% { transform: scale(1) translateY(0); filter: drop-shadow(var(--pin-glow-lo, 0 2px 3px rgba(5,150,105,0.25))); }
-  50%       { transform: scale(1.14) translateY(-3px); filter: drop-shadow(var(--pin-glow-hi, 0 4px 8px rgba(5,150,105,0.45))); }
+/* Sighting marker pulse — uses CSS variables for per-tier glow colors.
+   Phase C: markers are centre-anchored circles, not tip-anchored teardrops, so
+   this scales about its own centre and does NOT translate. The old pinBobPulse
+   grew upward from a fixed tip (transform-origin: 50% 100%) and added
+   translateY(-3px), which on a centred dot swings the marker off the very
+   coordinate it represents. Keep the origin and the translate as they are. */
+@keyframes pinRingPulse {
+  0%, 100% { transform: scale(1);    filter: drop-shadow(var(--pin-glow-lo, 0 2px 3px rgba(5,150,105,0.25))); }
+  50%      { transform: scale(1.14); filter: drop-shadow(var(--pin-glow-hi, 0 4px 8px rgba(5,150,105,0.45))); }
 }
 
-.bird-pin-pulse { animation: pinBobPulse 2.4s ease-in-out infinite; transform-origin: 50% 100%; }
+.bird-pin-pulse { animation: pinRingPulse 2.4s ease-in-out infinite; transform-origin: 50% 50%; }
 
 /* ─── Low battery mode ─── */
 /* Root class toggled from app/page.tsx when the setting is on or the OS reports
@@ -178,6 +183,11 @@ body {
    before tiles land. Values track Stadia alidade_smooth / alidade_smooth_dark. */
 /* !important because layout.tsx imports leaflet.css *after* this file, and
    leaflet's own `.leaflet-container { background: #ddd }` would otherwise win. */
+/* No `will-change` for the vector overlay here on purpose: leaflet.css:193 already
+   ships `svg.leaflet-zoom-animated { will-change: transform }`, and that <svg> is
+   exactly the element Renderer._updateTransform writes the zoom transform to. The
+   search-radius circle was already composited; its lag was frame budget, not
+   rasterization. See fixes/PhaseC_fixes.md §4.2. */
 .leaflet-container { background: #e8ecf0 !important; }
 .dark .leaflet-container { background: #0a0e14 !important; }
 .leaflet-marker-shadow { display: none; }

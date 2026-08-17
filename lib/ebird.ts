@@ -9,11 +9,22 @@ export interface Observation {
   lat: number;
   lng: number;
   obsId: string;
+  /**
+   * eBird's "personal location" flag — true when the observer created the
+   * location instead of picking an existing hotspot. Present in both the simple
+   * (`obs/geo/recent`) and full (`notable`, `detail=full`) responses.
+   * See lib/location-privacy.ts — nothing should read this field directly.
+   */
   locationPrivate: boolean;
   subId: string;
   notable?: boolean;
   /** Number of separate checklists reporting this species at this location in the last 7 days */
   reportCount?: number;
+  /** County / state names. Only returned under `detail=full` (the notable feed),
+   *  so treat them as optional even though eBird always sends them there. Used to
+   *  keep a push alert decidable when the location name has to be withheld. */
+  subnational2Name?: string;
+  subnational1Name?: string;
 }
 
 export interface Hotspot {

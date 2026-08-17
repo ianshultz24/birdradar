@@ -7,8 +7,9 @@ import { getTheme, tierTokens, tierLabel, type Theme } from '@/lib/theme';
 import { fetchChaseStats } from '@/lib/chase';
 import { haversineKm } from '@/lib/geo';
 import type { ArrivingSpecies } from '@/lib/forecast';
+import { isPrivateLocation, PRIVATE_LOCATION_LABEL } from '@/lib/location-privacy';
 import ChasePanel from '@/components/ChasePanel';
-import { SearchIcon, XIcon, MapPinIcon, TargetIcon } from '@/components/Icons';
+import { SearchIcon, XIcon, MapPinIcon, TargetIcon, LockIcon } from '@/components/Icons';
 
 type SortMode = 'recent' | 'closest' | 'chase';
 
@@ -440,8 +441,16 @@ function ObsCard({ obs, t, lightMode, yearListActive, focusedCode, onFlyTo, onFo
 
             {/* Meta row */}
             <div style={{ display: 'flex', alignItems: 'center', gap: 3, fontSize: 11.5, color: t.fg2, flexWrap: 'wrap' }}>
-              <MapPinIcon size={11} style={{ color: t.fg4, flexShrink: 0 }}/>
-              <span style={{ maxWidth: 150, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+              {/* A lock instead of a pin flags a personal location before the
+                  user taps in and finds no directions. `onFlyTo` below is map
+                  navigation, not routing, so it stays available for both. */}
+              {isPrivateLocation(obs)
+                ? <LockIcon size={11} style={{ color: t.fg4, flexShrink: 0 }}/>
+                : <MapPinIcon size={11} style={{ color: t.fg4, flexShrink: 0 }}/>}
+              <span
+                title={isPrivateLocation(obs) ? PRIVATE_LOCATION_LABEL : undefined}
+                style={{ maxWidth: 150, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}
+              >
                 {obs.locName}
               </span>
               {distKm !== undefined && (

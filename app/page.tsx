@@ -75,6 +75,10 @@ export default function Home() {
   // the default region. `searchCenter` below is what everything actually reads.
   const [baseCenter, setBaseCenter] = useState<[number, number]>(DEFAULT_CENTER);
   const [userLocation, setUserLocation] = useState<[number, number] | null>(null);
+  /** GPS accuracy in metres. Its own scalar rather than a third tuple slot, so
+   *  `userLocation`'s identity contract (read by InitialLocationController and
+   *  reCenterTarget in Map.tsx) is untouched. */
+  const [userAccuracyM, setUserAccuracyM] = useState<number | null>(null);
   const [pinLocation, setPinLocation] = useState<[number, number] | null>(null);
   const [lifeList, setLifeList] = useState<string[]>([]);
   const [yearList, setYearList] = useState<string[]>([]);
@@ -178,6 +182,9 @@ export default function Home() {
           const coords: [number, number] = [pos.coords.latitude, pos.coords.longitude];
           setBaseCenter(coords);
           setUserLocation(coords);
+          setUserAccuracyM(
+            typeof pos.coords.accuracy === 'number' ? pos.coords.accuracy : null
+          );
         },
         () => {
           // Permission denied or unavailable — keep default, show notice
@@ -751,6 +758,7 @@ export default function Home() {
           settings={settings}
           pinLocation={pinLocation}
           userLocation={userLocation}
+          userAccuracyM={userAccuracyM}
           focusedSpecies={focusedSpecies}
           selectedLocKey={selectedLocKey}
           loading={loading}

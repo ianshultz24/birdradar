@@ -11,7 +11,10 @@ import {
   getSyncCode, createSyncCode, linkSyncCode, clearSyncCode, type SyncPayload,
 } from '@/lib/sync-client';
 import { getTheme, type Theme } from '@/lib/theme';
+import { legendRows, LEGEND_SECTION_LABELS, type LegendSection } from '@/lib/marker-style';
+import { TILE_CREDITS } from '@/lib/tiles';
 import { RefreshCwIcon, WifiIcon, WifiOffIcon } from '@/components/Icons';
+import { LegendEntry } from '@/components/MapLegend';
 
 interface Props {
   settings: AppSettings;
@@ -38,6 +41,8 @@ export default function SettingsPanel({
   const t = getTheme(settings.lightMode);
   const [refreshHov, setRefreshHov] = useState(false);
   const lowFi = settings.lowBatteryMode || prefersReducedMotion;
+  const rows = legendRows(settings.lightMode);
+  const legendSections: LegendSection[] = ['sightings', 'locations', 'map'];
 
   function set<K extends keyof AppSettings>(key: K, value: AppSettings[K]) {
     onChange({ ...settings, [key]: value });
@@ -239,50 +244,88 @@ export default function SettingsPanel({
         </div>
       </Group>
 
+      {/* Marker Legend — the same rows the map chip shows, from the same
+          descriptors in lib/marker-style.ts. This group used to hand-draw its own
+          copies of the marker SVGs, which is how it ended up showing light-mode
+          greens in dark mode and no entry at all for the drop-pin or user dot. */}
       <Group label="Marker Legend" t={t}>
-        <div style={{ padding: '10px 20px 14px', display: 'flex', flexDirection: 'column', gap: 10 }}>
-          {/* Lifer — green pin, pulses */}
-          <LegendRow t={t} label="Lifer (new species)" pulse>
-            <svg width="12" height="16" viewBox="0 0 12 16" style={{ flexShrink: 0 }}>
-              <path d="M6 0C2.69 0 0 2.69 0 6c0 4.67 6 10 6 10s6-5.33 6-10C12 2.69 9.31 0 6 0z"
-                fill="#059669" opacity="0.9"/>
-              <circle cx="6" cy="5.5" r="2" fill="white" opacity="0.8"/>
-            </svg>
-          </LegendRow>
-          {/* Lifer + Rare — red pin, pulses */}
-          <LegendRow t={t} label="Lifer + Rare (new + eBird notable)" pulse>
-            <svg width="12" height="16" viewBox="0 0 12 16" style={{ flexShrink: 0 }}>
-              <path d="M6 0C2.69 0 0 2.69 0 6c0 4.67 6 10 6 10s6-5.33 6-10C12 2.69 9.31 0 6 0z"
-                fill="#DC2626" opacity="0.9"/>
-              <circle cx="6" cy="5.5" r="2" fill="white" opacity="0.8"/>
-            </svg>
-          </LegendRow>
-          {/* Rare — red pin, no pulse */}
-          <LegendRow t={t} label="Rare (eBird notable, already seen)">
-            <svg width="12" height="16" viewBox="0 0 12 16" style={{ flexShrink: 0 }}>
-              <path d="M6 0C2.69 0 0 2.69 0 6c0 4.67 6 10 6 10s6-5.33 6-10C12 2.69 9.31 0 6 0z"
-                fill="#DC2626" opacity="0.65"/>
-              <circle cx="6" cy="5.5" r="2" fill="white" opacity="0.8"/>
-            </svg>
-          </LegendRow>
-          {/* Seen — gray pin */}
-          <LegendRow t={t} label="Previously seen">
-            <svg width="12" height="16" viewBox="0 0 12 16" style={{ flexShrink: 0 }}>
-              <path d="M6 0C2.69 0 0 2.69 0 6c0 4.67 6 10 6 10s6-5.33 6-10C12 2.69 9.31 0 6 0z"
-                fill="#9CA3AF" opacity="0.75"/>
-              <circle cx="6" cy="5.5" r="2" fill="white" opacity="0.8"/>
-            </svg>
-          </LegendRow>
-          {/* Hotspot — colored dot */}
-          <LegendRow t={t} label="Hotspot (heatmap by species count)">
-            <div style={{
-              width: 10, height: 10, borderRadius: '50%',
-              background: 'linear-gradient(135deg, #f5a623, #ef4444)',
-              border: '1.5px solid rgba(255,255,255,0.4)',
-              boxShadow: '0 1px 3px rgba(0,0,0,0.25)',
-              flexShrink: 0,
-            }}/>
-          </LegendRow>
+        <div style={{ padding: '10px 20px 14px' }}>
+          <div style={{ fontSize: 11, color: t.fg3, fontFamily: t.sans, marginBottom: 10, lineHeight: 1.4 }}>
+            Also available any time from the Legend chip at the bottom-left of the map.
+          </div>
+          {legendSections.map((section) => {
+            const inSection = rows.filter((r) => r.section === section);
+            if (inSection.length === 0) return null;
+            return (
+              <div key={section} style={{ marginBottom: 12 }}>
+                <div style={{
+                  fontSize: 9.5, fontWeight: 700, fontFamily: t.mono, color: t.fg3,
+                  letterSpacing: '0.08em', textTransform: 'uppercase', marginBottom: 7,
+                }}>
+                  {LEGEND_SECTION_LABELS[section]}
+                </div>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 9 }}>
+                  {inSection.map((row) => (
+                    <LegendEntry key={row.id} row={row} t={t} pulseEnabled={settings.liferPulse} />
+                  ))}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      </Group>
+
+      {/* Credits — this is where the basemap attribution lives now. Leaflet's
+          corner control is switched off in components/Map.tsx; Stadia's and
+          OpenStreetMap's terms require the credit to be available and
+          discoverable, not painted over the map, so this group is a licensing
+          obligation rather than a nicety. The list comes from lib/tiles.ts so it
+          can't drift from what the TileLayer declares. Do not remove it. */}
+      <Group label="Credits" t={t}>
+        <div style={{ padding: '12px 20px 16px' }}>
+          <div style={{
+            fontSize: 9.5, fontWeight: 700, fontFamily: t.mono, color: t.fg3,
+            letterSpacing: '0.08em', textTransform: 'uppercase', marginBottom: 7,
+          }}>
+            Basemap
+          </div>
+          <div style={{
+            fontSize: 12, color: t.fg2, fontFamily: t.sans, lineHeight: 1.7, marginBottom: 12,
+          }}>
+            {TILE_CREDITS.map((c, i) => (
+              <span key={c.href}>
+                {i > 0 && <span style={{ color: t.fg4 }}> · </span>}
+                ©{' '}
+                <a
+                  href={c.href}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  style={{ color: t.accent, textDecoration: 'none' }}
+                >
+                  {c.label}
+                </a>
+              </span>
+            ))}
+          </div>
+
+          <div style={{
+            fontSize: 9.5, fontWeight: 700, fontFamily: t.mono, color: t.fg3,
+            letterSpacing: '0.08em', textTransform: 'uppercase', marginBottom: 7,
+          }}>
+            Bird data
+          </div>
+          <div style={{ fontSize: 12, color: t.fg2, fontFamily: t.sans, lineHeight: 1.7 }}>
+            Observations from{' '}
+            <a
+              href="https://ebird.org"
+              target="_blank"
+              rel="noopener noreferrer"
+              style={{ color: t.accent, textDecoration: 'none' }}
+            >
+              eBird
+            </a>
+            , Cornell Lab of Ornithology.
+          </div>
         </div>
       </Group>
     </div>
@@ -665,20 +708,3 @@ function AutoRefreshRow({ value, selected, onSelect, t }: {
   );
 }
 
-function LegendRow({ t, label, children, pulse }: { t: Theme; label: string; children: React.ReactNode; pulse?: boolean }) {
-  return (
-    <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-      <div style={{ width: 12, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
-        {children}
-      </div>
-      <span style={{ fontSize: 12, color: t.fg1, fontFamily: t.sans, flex: 1 }}>{label}</span>
-      {pulse && (
-        <span style={{
-          fontSize: 9, fontFamily: t.mono, color: t.accent,
-          background: t.accentBg, border: `1px solid ${t.accentBorder}`,
-          borderRadius: 4, padding: '1px 5px', letterSpacing: '0.04em', flexShrink: 0,
-        }}>pulse</span>
-      )}
-    </div>
-  );
-}

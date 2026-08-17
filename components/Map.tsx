@@ -17,79 +17,49 @@ import type { ClassifiedObservation, Hotspot } from '@/lib/ebird';
 import type { AppSettings } from '@/lib/ebird';
 import { timeAgo } from '@/lib/ebird';
 import type { MarkerGroup } from '@/lib/markers';
+import { isPrivateLocation } from '@/lib/location-privacy';
+import {
+  hotspotGlyph,
+  hotspotHeatColor,
+  pinSearchGlyph,
+  pulseGlowVars,
+  sightingGlyph,
+  tierCanPulse,
+  userDotGlyph,
+  USER_DOT_COLOR,
+  type MarkerGlyph,
+} from '@/lib/marker-style';
 import { getTheme, type Theme } from '@/lib/theme';
 import { getTileLayer } from '@/lib/tiles';
 import { useStableCallback } from '@/hooks/useStableCallback';
 import { RefreshCwIcon, CrosshairIcon, MapPinIcon, XIcon } from '@/components/Icons';
 import { DETAIL_PANEL_WIDTH } from '@/components/SpeciesDetailPanel';
-
-// ─── Tier colors for DivIcon HTML strings (CSS vars can't be used in html strings) ───
-const TIER_COLORS_LIGHT = {
-  'lifer-rare': '#DC2626',  // red — lifer + eBird notable (highest urgency)
-  'lifer':      '#059669',  // green — new species
-  'rare':       '#DC2626',  // red — eBird notable, already seen
-  'seen':       '#9CA3AF',  // gray — previously seen
-} as const;
-
-const TIER_COLORS_DARK = {
-  'lifer-rare': '#F87171',  // red
-  'lifer':      '#34D399',  // green
-  'rare':       '#F87171',  // red
-  'seen':       '#71717A',  // gray
-} as const;
-
-// Per-tier glow colors injected as CSS variables into the DivIcon HTML
-const TIER_GLOW_LO_LIGHT: Record<string, string> = {
-  'lifer-rare': '0 2px 4px rgba(220,38,38,0.28)',
-  'lifer':      '0 2px 4px rgba(5,150,105,0.28)',
-  'rare':       '0 2px 4px rgba(220,38,38,0.22)',
-  'seen':       '0 2px 3px rgba(0,0,0,0)',
-};
-const TIER_GLOW_HI_LIGHT: Record<string, string> = {
-  'lifer-rare': '0 4px 10px rgba(220,38,38,0.50)',
-  'lifer':      '0 4px 10px rgba(5,150,105,0.50)',
-  'rare':       '0 4px 10px rgba(220,38,38,0.40)',
-  'seen':       '0 4px 8px rgba(0,0,0,0)',
-};
-const TIER_GLOW_LO_DARK: Record<string, string> = {
-  'lifer-rare': '0 2px 4px rgba(248,113,113,0.35)',
-  'lifer':      '0 2px 4px rgba(52,211,153,0.35)',
-  'rare':       '0 2px 4px rgba(248,113,113,0.28)',
-  'seen':       '0 2px 3px rgba(0,0,0,0)',
-};
-const TIER_GLOW_HI_DARK: Record<string, string> = {
-  'lifer-rare': '0 4px 12px rgba(248,113,113,0.55)',
-  'lifer':      '0 4px 12px rgba(52,211,153,0.55)',
-  'rare':       '0 4px 12px rgba(248,113,113,0.46)',
-  'seen':       '0 4px 8px rgba(0,0,0,0)',
-};
-
-type TierKey = keyof typeof TIER_COLORS_LIGHT;
-
-// ─── Heatmap color helper ─────────────────────────────────────────────────────
-
-function lerpColor(a: string, b: string, t: number): string {
-  const ah = a.replace('#', '');
-  const bh = b.replace('#', '');
-  const ar = parseInt(ah.slice(0, 2), 16);
-  const ag = parseInt(ah.slice(2, 4), 16);
-  const ab = parseInt(ah.slice(4, 6), 16);
-  const br = parseInt(bh.slice(0, 2), 16);
-  const bg = parseInt(bh.slice(2, 4), 16);
-  const bb = parseInt(bh.slice(4, 6), 16);
-  const r = Math.round(ar + (br - ar) * t);
-  const g = Math.round(ag + (bg - ag) * t);
-  const bl = Math.round(ab + (bb - ab) * t);
-  return `#${r.toString(16).padStart(2, '0')}${g.toString(16).padStart(2, '0')}${bl.toString(16).padStart(2, '0')}`;
-}
-
-function hotspotHeatColor(ratio: number): string {
-  if (ratio < 0.33) return lerpColor('#556677', '#f5a623', ratio / 0.33);
-  if (ratio < 0.66) return lerpColor('#f5a623', '#ff7043', (ratio - 0.33) / 0.33);
-  return lerpColor('#ff7043', '#ef4444', (ratio - 0.66) / 0.34);
-}
+import MapLegend from '@/components/MapLegend';
 
 const noop = () => {};
+
+/** Beyond this, a reported GPS accuracy is a shrug, not a measurement. */
+const MAX_ACCURACY_HALO_M = 5000;
+
+// ─── Hotspot budget ───────────────────────────────────────────────────────────
+// eBird returns every hotspot in the search radius: 916 of them in the default
+// area, against 77 sighting markers. Leaflet gives each one a
+// `leaflet-zoom-animated` icon and rewrites its transform on every zoom.
+// Measured on the live app (fixes/PhaseC_fixes.md §3.3): writing that transform to
+// 993 icons and flushing style + layout costs ~16 ms — the whole 16.7 ms frame
+// budget, before a single pixel is rastered. Sightings alone cost ~1 ms.
+//
+// That is why the markers and the vector overlay used to commit their zoom
+// transitions a frame behind the tiles and appear to slide against the basemap.
+// These three numbers are a rendering budget, not a taste preference.
+
+/** Below this zoom a hotspot field is noise, not information. */
+const MIN_HOTSPOT_ZOOM = 10;
+/** Ceiling on hotspot markers, applied after viewport culling. */
+const MAX_HOTSPOT_MARKERS = 150;
+/** Viewport margin kept when culling, so a small pan doesn't pop markers in at
+ *  the edge of the screen. */
+const HOTSPOT_VIEWPORT_PAD = 0.25;
 
 // Hover tooltips are pointer affordances. On touch, Leaflet's bindTooltip also
 // wires `click` to open the tooltip, which would race the click that opens the
@@ -99,7 +69,29 @@ const canHover =
   typeof window.matchMedia === 'function' &&
   window.matchMedia('(hover: hover) and (pointer: fine)').matches;
 
-// ─── Bird pin icon (teardrop SVG, anchored at tip) ────────────────────────────
+// ─── Icons ────────────────────────────────────────────────────────────────────
+// All artwork comes from lib/marker-style.ts so the legend can render the exact
+// same glyphs. This file owns only the L.DivIcon wrapping and the caches.
+//
+// Every marker here is **centre-anchored** — the latlng sits at the middle of the
+// box. Phase B's markers were tip-anchored teardrops; that change is why the
+// tooltip offsets below had to become derived rather than constant.
+
+/** Wrap a glyph in a centre-anchored DivIcon. `className: ''` is required —
+ *  DivIcon otherwise defaults to `leaflet-div-icon`, which paints a white box. */
+function divIconFromGlyph(glyph: MarkerGlyph, wrapper?: { cls?: string; style?: string }): L.DivIcon {
+  const c = glyph.box / 2;
+  const svg = `<svg width="${glyph.box}" height="${glyph.box}" viewBox="0 0 ${glyph.box} ${glyph.box}" fill="none" overflow="visible">${glyph.svg}</svg>`;
+  return L.divIcon({
+    className: '',
+    html: wrapper
+      ? `<div class="${wrapper.cls ?? ''}" style="display:inline-block;${wrapper.style ?? ''}">${svg}</div>`
+      : svg,
+    iconSize: [glyph.box, glyph.box],
+    iconAnchor: [c, c],
+    popupAnchor: [0, -(c + 4)],
+  });
+}
 
 // Icons are pure functions of a few discrete inputs — cache them so re-renders
 // reuse L.DivIcon instances instead of rebuilding ~400 of them each time.
@@ -110,54 +102,35 @@ const birdPinIconCache = new Map<string, L.DivIcon>();
 // react-leaflet calls setIcon() → DivIcon._createIcon() resets innerHTML → every
 // pulse animation restarts. Opacity goes through <Marker opacity> instead, which
 // writes style.opacity on the existing element.
+//
+// The cache key must name every input. `isPrivate` was added in Phase C; forget
+// one and markers silently share the wrong artwork. 4 tiers × 2⁴ = 64 entries max.
 function birdPinIcon(
   tier: ClassifiedObservation['tier'],
   pulse: boolean,
   focused = false,
   lightMode = false,
+  isPrivate = false,
 ): L.DivIcon {
-  const cacheKey = `${tier}|${pulse}|${focused}|${lightMode}`;
+  const cacheKey = `${tier}|${pulse}|${focused}|${lightMode}|${isPrivate}`;
   const cached = birdPinIconCache.get(cacheKey);
   if (cached) return cached;
 
-  const tc = lightMode ? TIER_COLORS_LIGHT : TIER_COLORS_DARK;
-  const color = tc[tier as TierKey] ?? tc.seen;
-  const dotBg = lightMode ? '#FFFFFF' : '#111113';
+  const glyph = sightingGlyph(tier, { lightMode, focused, isPrivate });
+  const shouldPulse = pulse && tierCanPulse(tier);
 
-  // Bigger pins for high-priority tiers
-  const sizes: Record<string, [number, number]> = {
-    'lifer-rare': [20, 28],
-    lifer:        [18, 25],
-    rare:         [16, 22],
-    seen:         [14, 19],
-  };
-  const [w, h] = sizes[tier] ?? [14, 19];
-
-  const shouldPulse = pulse && (tier === 'lifer-rare' || tier === 'lifer');
-  const pulseClass = shouldPulse ? 'bird-pin-pulse' : '';
-
-  const glowLoTable = lightMode ? TIER_GLOW_LO_LIGHT : TIER_GLOW_LO_DARK;
-  const glowHiTable = lightMode ? TIER_GLOW_HI_LIGHT : TIER_GLOW_HI_DARK;
-  const glowLo = glowLoTable[tier] ?? glowLoTable.seen;
-  const glowHi = glowHiTable[tier] ?? glowHiTable.seen;
-
-  // Outer focus ring drawn inside the SVG viewBox
-  const focusRing = focused
-    ? `<circle cx="10" cy="9.5" r="6.5" fill="none" stroke="${color}" stroke-width="1.5" opacity="0.45"/>`
-    : '';
-
-  const icon = L.divIcon({
-    className: '',
-    html: `<div class="${pulseClass}" style="display:inline-block;transform-origin:50% 100%;--pin-glow-lo:${glowLo};--pin-glow-hi:${glowHi}"><svg width="${w}" height="${h}" viewBox="0 0 20 28" fill="none" overflow="visible"><path d="M10 0C4.5 0 0 4.5 0 10c0 7 10 18 10 18s10-11 10-18C20 4.5 15.5 0 10 0z" fill="${color}" opacity="${focused ? 1 : 0.88}"/>${focusRing}<circle cx="10" cy="9.5" r="3.5" fill="${dotBg}" opacity="0.88"/></svg></div>`,
-    iconSize: [w, h],
-    iconAnchor: [Math.round(w / 2), h],
-    popupAnchor: [0, -(h + 4)],
+  const icon = divIconFromGlyph(glyph, {
+    cls: shouldPulse ? 'bird-pin-pulse' : '',
+    // transform-origin is centre now, not the tip — see @keyframes pinRingPulse.
+    style: `transform-origin:50% 50%;${pulseGlowVars(tier, lightMode)}`,
   });
   birdPinIconCache.set(cacheKey, icon);
   return icon;
 }
 
-// ─── Hotspot dot icon (circle, heatmap colored) ───────────────────────────────
+// ─── Hotspot icon (diamond outline, heatmap colored) ──────────────────────────
+// A different shape, not just a different colour — a hotspot can no longer be
+// mistaken for a sighting at a glance.
 
 const hotspotIconCache = new Map<number, L.DivIcon>();
 
@@ -167,15 +140,7 @@ function hotspotIcon(ratio: number): L.DivIcon {
   const cached = hotspotIconCache.get(bucket);
   if (cached) return cached;
 
-  const color = hotspotHeatColor(bucket);
-  const size = 10;
-  const icon = L.divIcon({
-    className: '',
-    html: `<div style="width:${size}px;height:${size}px;border-radius:50%;background:${color};opacity:0.88;box-shadow:0 1px 4px rgba(0,0,0,0.28);border:1.5px solid rgba(255,255,255,0.45);"></div>`,
-    iconSize: [size, size],
-    iconAnchor: [size / 2, size / 2],
-    popupAnchor: [0, -(size / 2 + 4)],
-  });
+  const icon = divIconFromGlyph(hotspotGlyph(hotspotHeatColor(bucket)));
   hotspotIconCache.set(bucket, icon);
   return icon;
 }
@@ -185,31 +150,15 @@ function hotspotIcon(ratio: number): L.DivIcon {
 let userLocationIconCached: L.DivIcon | null = null;
 
 function userLocationIcon(): L.DivIcon {
-  if (userLocationIconCached) return userLocationIconCached;
-  const size = 16;
-  return (userLocationIconCached = L.divIcon({
-    className: '',
-    html: `<div style="width:${size}px;height:${size}px;border-radius:50%;background:#3b82f6;border:3px solid #fff;box-shadow:0 0 0 2px rgba(59,130,246,0.35),0 2px 8px rgba(0,0,0,0.2);"></div>`,
-    iconSize: [size, size],
-    iconAnchor: [size / 2, size / 2],
-    popupAnchor: [0, -(size / 2 + 4)],
-  }));
+  return (userLocationIconCached ??= divIconFromGlyph(userDotGlyph()));
 }
 
-// ─── Drop-pin marker (amber, indicates custom search center) ──────────────────
+// ─── Custom search location (crosshair) ───────────────────────────────────────
 
-let pinDropIconCached: L.DivIcon | null = null;
+let pinSearchIconCached: L.DivIcon | null = null;
 
-function pinDropIcon(): L.DivIcon {
-  if (pinDropIconCached) return pinDropIconCached;
-  const w = 20, h = 28;
-  return (pinDropIconCached = L.divIcon({
-    className: '',
-    html: `<svg width="${w}" height="${h}" viewBox="0 0 20 28" fill="none" overflow="visible"><path d="M10 0C4.5 0 0 4.5 0 10c0 7 10 18 10 18s10-11 10-18C20 4.5 15.5 0 10 0z" fill="#F59E0B" opacity="0.9"/><circle cx="10" cy="9.5" r="3.5" fill="white" opacity="0.88"/></svg>`,
-    iconSize: [w, h],
-    iconAnchor: [w / 2, h],
-    popupAnchor: [0, -(h + 6)],
-  }));
+function pinSearchIcon(): L.DivIcon {
+  return (pinSearchIconCached ??= divIconFromGlyph(pinSearchGlyph()));
 }
 
 // ─── RecenterController ───────────────────────────────────────────────────────
@@ -330,11 +279,60 @@ function MapController({ target }: { target: [number, number] | null }) {
 //
 // `offset` has to flip with the direction: Leaflet adds it after choosing the
 // direction, so a gap tuned for 'top' drags a 'bottom' tooltip up over its pin.
-// The 'top' offset also clears the tallest pin, because a marker's latlng sits at
-// the pin tip and the artwork extends upwards from there.
+//
+// ─── Why the offsets are derived rather than constant ────────────────────────
+//
+// Phase B hard-coded -30 / +4, tuned for a teardrop whose latlng sat at the pin
+// *tip* with 28 px of artwork above it. Verified in Tooltip._setPosition
+// (leaflet-src.js:10739): Leaflet positions a tooltip from the marker's latlng
+// plus `options.offset` plus the icon's `tooltipAnchor` (default [0,0],
+// leaflet-src.js:7380) — **icon size and iconAnchor are never consulted.** So a
+// constant is really a constant *for one icon geometry*, and Phase C now ships
+// five: boxes from 12 px (`seen`) to 34 px (private `lifer-rare`), all
+// centre-anchored. One formula, read off each marker's own icon:
+//
+//   dyAbove = -(iconAnchor.y + GAP)              clear the artwork above the anchor
+//   dyBelow =  (iconSize.y - iconAnchor.y) + GAP clear the artwork below it
+//   dxSide  =  max(anchor.x, size.x - anchor.x) + GAP
+//
+// Sanity-checked against the values it replaces before adoption: the old teardrop
+// (iconSize [20,28], iconAnchor [10,28]) yields -32 / +4 against the hand-tuned
+// -30 / +4. The formula reproduces the tuning.
+//
+// `dxSide` covers the *unflipped* case, which Phase B left at offset.x = 0 —
+// putting the tooltip's inner edge on the marker's latlng, i.e. overlapping half
+// the glyph. Barely visible on a tip-anchored teardrop; obvious on a centred dot.
+// A single positive offset.x gives a symmetric gap on both sides: the 'right'
+// branch puts the left edge at pos.x + offset.x, and the 'left' branch's
+// `subX = tooltipWidth + (offset.x + anchor.x) * 2` resolves to a right edge at
+// pos.x - offset.x. That doubling is Leaflet mirroring the offset, not a bug —
+// it is exactly why one value serves both sides.
 
-const TOOLTIP_GAP_BELOW = 4;
-const TOOLTIP_GAP_ABOVE = -30;
+const TOOLTIP_GAP = 4;
+
+/** Phase B's constants, used only if a marker's icon omits its metrics. */
+const TOOLTIP_FALLBACK = { dxSide: 0, dyAbove: -30, dyBelow: 4 };
+
+/**
+ * Tooltip spacing for a marker, derived from its own icon box.
+ *
+ * `L.point(undefined)` returns `undefined` rather than throwing, so reading `.y`
+ * off it would blow up inside a requestAnimationFrame with no useful stack. Every
+ * icon in this file sets both fields; the bail-out is here so a future marker
+ * kind that forgets can't take the whole tooltip layer down with it.
+ */
+function iconTooltipMetrics(source: L.Marker): typeof TOOLTIP_FALLBACK {
+  const io = (source.options?.icon as L.Icon | undefined)?.options;
+  if (!io?.iconSize || !io?.iconAnchor) return TOOLTIP_FALLBACK;
+  const size = L.point(io.iconSize as L.PointExpression);
+  const anchor = L.point(io.iconAnchor as L.PointExpression);
+  if (!size || !anchor) return TOOLTIP_FALLBACK;
+  return {
+    dxSide: Math.max(anchor.x, size.x - anchor.x) + TOOLTIP_GAP,
+    dyAbove: -(anchor.y + TOOLTIP_GAP),
+    dyBelow: size.y - anchor.y + TOOLTIP_GAP,
+  };
+}
 
 function useTooltipEdgeFlip() {
   const map = useMap();
@@ -343,8 +341,18 @@ function useTooltipEdgeFlip() {
     tooltipopen: (e: L.TooltipEvent) => {
       const tooltip = e.tooltip;
       const source = e.target as L.Marker;
+      const metrics = iconTooltipMetrics(source);
+
+      // The side gap depends only on the icon, so apply it now. Deferring it to
+      // the frame below would paint one frame of tooltip-over-glyph on every
+      // first hover.
+      tooltip.options.direction = 'auto';
+      tooltip.options.offset = L.point(metrics.dxSide, 0);
+      tooltip.update();
+
       // react-leaflet portals the children in on its own tooltipopen listener, so
-      // on the very first hover the element is still empty this tick.
+      // on the very first hover the element is still empty this tick — and the
+      // flip decision needs the rendered size.
       requestAnimationFrame(() => {
         const el = tooltip.getElement();
         if (!el || !el.isConnected || !source.getLatLng) return;
@@ -362,12 +370,14 @@ function useTooltipEdgeFlip() {
 
         // A vertical flip centres the tooltip horizontally on the pin, which can
         // clip in a corner — nudge it back inside by however much it overhangs.
-        let dx = 0;
+        // This only ever applies when subX = tooltipWidth / 2, so it never meets
+        // the 'left' branch's offset doubling described above.
+        let dx = metrics.dxSide;
         if (direction !== 'auto') {
           dx = Math.max(0, w / 2 - point.x) - Math.max(0, point.x + w / 2 - size.x);
         }
-        const dy = direction === 'bottom' ? TOOLTIP_GAP_BELOW
-          : direction === 'top' ? TOOLTIP_GAP_ABOVE
+        const dy = direction === 'bottom' ? metrics.dyBelow
+          : direction === 'top' ? metrics.dyAbove
           : 0;
 
         const offset = tooltip.options.offset as L.Point | undefined;
@@ -382,6 +392,8 @@ function useTooltipEdgeFlip() {
     },
     tooltipclose: (e: L.TooltipEvent) => {
       // Re-measure from neutral next time rather than inheriting the last flip.
+      // tooltipopen re-derives the offset synchronously, so zeroing it here can't
+      // leak a wrong gap into the next hover.
       e.tooltip.options.direction = 'auto';
       e.tooltip.options.offset = L.point(0, 0);
     },
@@ -408,6 +420,9 @@ interface BirdPinMarkerProps {
   pulse: boolean;
   focused: boolean;
   lightMode: boolean;
+  /** eBird personal location — draws the dotted "approximate" ring. A primitive,
+   *  so React.memo still holds. See lib/location-privacy.ts. */
+  isPrivate: boolean;
   opacity: number;
   showTooltip: boolean;
   group: ClassifiedObservation[];
@@ -422,6 +437,7 @@ const BirdPinMarker = memo(function BirdPinMarker({
   pulse,
   focused,
   lightMode,
+  isPrivate,
   opacity,
   showTooltip,
   group,
@@ -429,8 +445,8 @@ const BirdPinMarker = memo(function BirdPinMarker({
 }: BirdPinMarkerProps) {
   const position = useMemo<[number, number]>(() => [lat, lng], [lat, lng]);
   const icon = useMemo(
-    () => birdPinIcon(tier, pulse, focused, lightMode),
-    [tier, pulse, focused, lightMode]
+    () => birdPinIcon(tier, pulse, focused, lightMode, isPrivate),
+    [tier, pulse, focused, lightMode, isPrivate]
   );
 
   const tooltipHandlers = useTooltipEdgeFlip();
@@ -506,6 +522,75 @@ const HotspotMarker = memo(function HotspotMarker({
   );
 });
 
+// ─── HotspotLayer ─────────────────────────────────────────────────────────────
+// Draws only the hotspots that are actually on screen, capped (see the budget
+// above). Nothing is removed from the data — pan or zoom in and the rest appear.
+//
+// The viewport state lives HERE rather than in BirdMap on purpose. Hoisting it
+// would re-render every sighting marker on every map movement, which is exactly
+// the per-frame cost this component exists to remove.
+//
+// It listens on `moveend` only — which fires after a pan and after a zoom — so
+// markers never mount or unmount part-way through an animation. Subscribing to
+// `move` or `zoom` instead would reintroduce the stall inside the frames that
+// matter.
+
+interface RankedHotspot {
+  hs: Hotspot;
+  /** Heat ratio 0..1, precomputed in BirdMap so culling doesn't recompute it. */
+  ratio: number;
+}
+
+const HotspotLayer = memo(function HotspotLayer({
+  hotspots,
+  showTooltip,
+  onMoreInfo,
+}: {
+  /** Pre-sorted by heat, descending — the cap below depends on that order. */
+  hotspots: RankedHotspot[];
+  showTooltip: boolean;
+  onMoreInfo: (hs: Hotspot) => void;
+}) {
+  const map = useMap();
+  const [view, setView] = useState(() => ({ zoom: map.getZoom(), bounds: map.getBounds() }));
+
+  // Memoized: react-leaflet re-registers the whole handler set whenever this
+  // object's identity changes.
+  const handlers = useMemo(
+    () => ({ moveend: () => setView({ zoom: map.getZoom(), bounds: map.getBounds() }) }),
+    [map]
+  );
+  useMapEvents(handlers);
+
+  const visible = useMemo(() => {
+    if (view.zoom < MIN_HOTSPOT_ZOOM) return [];
+    const bounds = view.bounds.pad(HOTSPOT_VIEWPORT_PAD);
+    const out: RankedHotspot[] = [];
+    for (const entry of hotspots) {
+      if (!bounds.contains([entry.hs.lat, entry.hs.lng] as L.LatLngTuple)) continue;
+      out.push(entry);
+      // `hotspots` is heat-sorted, so this keeps the best ones rather than
+      // whichever the API happened to return first.
+      if (out.length === MAX_HOTSPOT_MARKERS) break;
+    }
+    return out;
+  }, [hotspots, view]);
+
+  return (
+    <>
+      {visible.map(({ hs, ratio }) => (
+        <HotspotMarker
+          key={hs.locId}
+          hs={hs}
+          ratio={ratio}
+          showTooltip={showTooltip}
+          onMoreInfo={onMoreInfo}
+        />
+      ))}
+    </>
+  );
+});
+
 // ─── Main Map component ───────────────────────────────────────────────────────
 
 export interface MapProps {
@@ -523,6 +608,9 @@ export interface MapProps {
   settings: AppSettings;
   pinLocation: [number, number] | null;
   userLocation: [number, number] | null;
+  /** GPS accuracy radius in metres, from `pos.coords.accuracy`. Drives the halo
+   *  under the user dot; null/absurd values simply draw nothing. */
+  userAccuracyM?: number | null;
   focusedSpecies: { code: string; name: string } | null;
   /** locKey of the sighting whose detail panel is open, if any. */
   selectedLocKey: string | null;
@@ -548,6 +636,7 @@ export default function BirdMap({
   settings,
   pinLocation,
   userLocation,
+  userAccuracyM,
   focusedSpecies,
   selectedLocKey,
   isMobile,
@@ -591,7 +680,9 @@ export default function BirdMap({
   const focusedCode = focusedSpecies?.code ?? null;
   const pulseEnabled = settings.liferPulse && !lowFi;
 
-  const { getHotspotHeat, maxHeat } = useMemo(() => {
+  // Heat resolved and sorted once, here, rather than per-marker on every render.
+  // HotspotLayer's cap relies on this being ordered best-first.
+  const rankedHotspots = useMemo<RankedHotspot[]>(() => {
     const hotspotRecentSpecies = new Map<string, Set<string>>();
     for (const obs of observations) {
       if (obs.locId) {
@@ -599,10 +690,12 @@ export default function BirdMap({
         hotspotRecentSpecies.get(obs.locId)!.add(obs.speciesCode);
       }
     }
-    const getHotspotHeat = (hs: Hotspot) =>
+    const heat = (hs: Hotspot) =>
       Math.max(hs.numSpeciesAllTime || 0, hotspotRecentSpecies.get(hs.locId)?.size ?? 0);
-    const maxHeat = Math.max(...hotspots.map(getHotspotHeat), 1);
-    return { getHotspotHeat, maxHeat };
+    const maxHeat = Math.max(...hotspots.map(heat), 1);
+    return hotspots
+      .map(hs => ({ hs, ratio: Math.min(heat(hs) / maxHeat, 1) }))
+      .sort((a, b) => b.ratio - a.ratio);
   }, [observations, hotspots]);
 
   // Memoized so the object identity only changes with the theme — same rule as
@@ -610,6 +703,36 @@ export default function BirdMap({
   const { url: tileUrl, attribution: tileAttrib } = useMemo(
     () => getTileLayer(lightMode),
     [lightMode]
+  );
+
+  // A coarse IP-derived fix reports tens of kilometres of "accuracy"; drawing it
+  // would paint a blue disc over the whole map and tell the user nothing. Above
+  // the cap we show the dot alone rather than a halo that means "somewhere".
+  const haloRadiusM =
+    typeof userAccuracyM === 'number' &&
+    Number.isFinite(userAccuracyM) &&
+    userAccuracyM > 0 &&
+    userAccuracyM <= MAX_ACCURACY_HALO_M
+      ? userAccuracyM
+      : null;
+
+  // Memoized because react-leaflet compares pathOptions by identity and calls
+  // layer.setStyle() whenever it changes — an object literal here meant every
+  // BirdMap render restyled both circles. `theme` is a module-level singleton per
+  // mode (lib/theme.ts), so these hold. Same rule as the marker props above.
+  const radiusPathOptions = useMemo(
+    () => ({ color: theme.accent, weight: 1.5, opacity: 0.4, fillOpacity: 0, dashArray: '6 4' }),
+    [theme]
+  );
+  const haloPathOptions = useMemo(
+    () => ({
+      color: USER_DOT_COLOR,
+      weight: 1,
+      opacity: 0.35,
+      fillColor: USER_DOT_COLOR,
+      fillOpacity: 0.1,
+    }),
+    []
   );
 
   return (
@@ -625,6 +748,10 @@ export default function BirdMap({
         // globals.css owns it via .leaflet-container / .dark .leaflet-container.
         style={{ height: '100%', width: '100%' }}
         zoomControl={false}
+        // The Stadia / OpenMapTiles / OpenStreetMap credit is not deleted — it
+        // renders in Settings → Credits instead, which is what keeps this
+        // compliant with their terms. See lib/tiles.ts.
+        attributionControl={false}
         zoomSnap={0.5}
         zoomDelta={0.5}
         wheelPxPerZoomLevel={120}
@@ -656,27 +783,19 @@ export default function BirdMap({
           <Circle
             center={searchCenter}
             radius={searchRadiusKm * 1000}
-            pathOptions={{
-              color: theme.accent,
-              weight: 1.5,
-              opacity: 0.4,
-              fillOpacity: 0,
-              dashArray: '6 4',
-            }}
+            pathOptions={radiusPathOptions}
           />
         )}
 
-        {/* Hotspot markers — rendered behind bird markers */}
-        {settings.showHotspots &&
-          hotspots.map(hs => (
-            <HotspotMarker
-              key={hs.locId}
-              hs={hs}
-              ratio={Math.min(getHotspotHeat(hs) / maxHeat, 1)}
-              showTooltip={canHover}
-              onMoreInfo={hotspotDetail}
-            />
-          ))}
+        {/* Hotspot markers — rendered behind bird markers, viewport-culled and
+            capped. See the hotspot budget at the top of this file. */}
+        {settings.showHotspots && (
+          <HotspotLayer
+            hotspots={rankedHotspots}
+            showTooltip={canHover}
+            onMoreInfo={hotspotDetail}
+          />
+        )}
 
         {/* Bird sighting pin markers — grouped by location */}
         {markerGroups.map(([locKey, group]) => {
@@ -697,6 +816,7 @@ export default function BirdMap({
               pulse={pulseEnabled}
               focused={isFocused}
               lightMode={lightMode}
+              isPrivate={isPrivateLocation(repObs)}
               opacity={baseOpacity * focusOpacity}
               showTooltip={canHover}
               group={group}
@@ -705,20 +825,39 @@ export default function BirdMap({
           );
         })}
 
+        {/* GPS accuracy halo — drawn in ground units, so it stays honest at every
+            zoom. `interactive={false}` is required: Paths bubble mouse events by
+            default (leaflet-src.js:8166), which is what makes clicking the search
+            radius circle dismiss the detail panel. A halo that can be hundreds of
+            metres wide must not become a dismiss target over the user's position. */}
+        {userLocation && haloRadiusM != null && (
+          <Circle
+            center={userLocation}
+            radius={haloRadiusM}
+            interactive={false}
+            pathOptions={haloPathOptions}
+          />
+        )}
+
         {/* User GPS location dot */}
         {userLocation && (
           <Marker position={userLocation} icon={userLocationIcon()} zIndexOffset={1000}>
             <Popup className="bird-popup">
-              <div style={{ fontFamily: theme.sans, fontSize: 13, fontWeight: 600, color: '#3b82f6' }}>
+              <div style={{ fontFamily: theme.sans, fontSize: 13, fontWeight: 600, color: USER_DOT_COLOR }}>
                 Your Location
               </div>
+              {haloRadiusM != null && (
+                <div style={{ fontSize: 11, color: theme.fg3, fontFamily: theme.mono, marginTop: 3 }}>
+                  Accurate to about {Math.round(haloRadiusM)} m
+                </div>
+              )}
             </Popup>
           </Marker>
         )}
 
-        {/* Custom search pin */}
+        {/* Custom search location — a crosshair, unlike any sighting marker */}
         {pinLocation && (
-          <Marker position={pinLocation} icon={pinDropIcon()}>
+          <Marker position={pinLocation} icon={pinSearchIcon()}>
             <Popup className="bird-popup">
               <div style={{ fontFamily: theme.sans, minWidth: 170 }}>
                 <div style={{ fontSize: 13, fontWeight: 700, color: '#F59E0B', fontFamily: theme.display, marginBottom: 5 }}>
@@ -744,6 +883,17 @@ export default function BirdMap({
           </Marker>
         )}
       </MapContainer>
+
+      {/* Sibling of MapContainer, like MapControls — outside the Leaflet
+          container, so Leaflet never sees its clicks or wheel events. */}
+      <MapLegend
+        theme={theme}
+        lightMode={lightMode}
+        isMobile={!!isMobile}
+        lowFi={lowFi}
+        detailOpen={!!selectedLocKey}
+        pulseEnabled={pulseEnabled}
+      />
 
       <MapControls
         theme={theme}

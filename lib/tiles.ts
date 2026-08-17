@@ -22,9 +22,32 @@
  */
 const STADIA_API_KEY = process.env.NEXT_PUBLIC_STADIA_API_KEY ?? '';
 
-/** Required by Stadia's terms — keep all three credits. */
-const ATTRIBUTION =
-  '&copy; <a href="https://stadiamaps.com/">Stadia Maps</a> &copy; <a href="https://openmaptiles.org/">OpenMapTiles</a> &copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>';
+/**
+ * Basemap credits — required by Stadia's and OpenStreetMap's terms. Keep all three.
+ *
+ * These no longer render in the map's corner: `attributionControl={false}` in
+ * components/Map.tsx removes Leaflet's control, and the credits are shown in
+ * Settings → Credits instead (components/SettingsPanel.tsx). Both licences require
+ * the credit to be **available and discoverable**, not painted over the map at all
+ * times, and an in-app credits screen is the standard accommodation for a
+ * constrained UI. Deleting it outright is a licensing violation and risks the API
+ * key, so this list is not a style choice — do not trim it.
+ *
+ * This array is the single definition; ATTRIBUTION below is derived from it so the
+ * two can't drift.
+ */
+export const TILE_CREDITS: ReadonlyArray<{ label: string; href: string }> = [
+  { label: 'Stadia Maps', href: 'https://stadiamaps.com/' },
+  { label: 'OpenMapTiles', href: 'https://openmaptiles.org/' },
+  { label: 'OpenStreetMap', href: 'https://www.openstreetmap.org/copyright' },
+];
+
+/** Leaflet-control form of the same credits. Still handed to the TileLayer so the
+ *  layer declares its own attribution and an attribution control would just work
+ *  if one is ever mounted again. */
+const ATTRIBUTION = TILE_CREDITS.map(
+  c => `&copy; <a href="${c.href}">${c.label}</a>`
+).join(' ');
 
 export interface TileSource {
   url: string;

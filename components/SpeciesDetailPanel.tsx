@@ -6,7 +6,14 @@ import type { ClassifiedObservation } from '@/lib/ebird';
 import { timeAgo } from '@/lib/ebird';
 import { getTheme, tierTokens, tierLabel, type Theme } from '@/lib/theme';
 import { getSpeciesPhotoUrl } from '@/lib/species-photo';
-import { XIcon } from '@/components/Icons';
+import {
+  formatCoords,
+  isPrivateLocation,
+  observationDirectionsUrl,
+  PRIVATE_LOCATION_HINT,
+  PRIVATE_LOCATION_LABEL,
+} from '@/lib/location-privacy';
+import { LockIcon, NavigationIcon, XIcon } from '@/components/Icons';
 import ChasePanel from './ChasePanel';
 
 /**
@@ -268,29 +275,85 @@ function SpeciesPhoto({ sciName, comName, theme }: { sciName: string; comName: s
 
 // ─── Location + sighting meta ─────────────────────────────────────────────────
 // Kept as its own block with a name line, a badge row and a trailing action
-// slot. The location-privacy treatment (locationPrivate → "approximate", no
-// directions) and the drive-time badge both land here, so neither has to
-// restructure this layout.
+// slot. Phase C landed the location-privacy treatment and the Directions action
+// in the slot Phase B reserved for them, without restructuring the layout. The
+// drive-time badge is the remaining tenant.
+//
+// Privacy: a private location is *labelled*, and eBird's own `locName` is kept
+// beneath it in muted type. eBird publishes that name itself, so hiding it buys
+// no privacy while costing real context ("Monohon Woods (Restricted Access)" is
+// worth reading). What is withheld is the thing that actually enables a visit:
+// the directions action, and coordinate precision.
 
 function LocationRow({ obs, theme: t }: { obs: ClassifiedObservation; theme: Theme }) {
+  const isPrivate = isPrivateLocation(obs);
+  const directions = observationDirectionsUrl(obs);
+
   return (
     <div style={{
       padding: '10px 12px', marginBottom: 14,
       background: t.bg2, border: `1px solid ${t.line2}`, borderRadius: 10,
     }}>
-      <div style={{ fontSize: 12.5, color: t.fg1, fontWeight: 600, lineHeight: 1.35 }}>
-        {obs.locName}
-      </div>
+      {isPrivate ? (
+        <>
+          <div style={{
+            display: 'flex', alignItems: 'center', gap: 6,
+            fontSize: 12.5, color: t.fg1, fontWeight: 600, lineHeight: 1.35,
+          }}>
+            <LockIcon size={12} style={{ color: t.fg3 }} />
+            {PRIVATE_LOCATION_LABEL}
+          </div>
+          <div style={{ fontSize: 11.5, color: t.fg3, lineHeight: 1.35, marginTop: 2 }}>
+            {obs.locName}
+          </div>
+        </>
+      ) : (
+        <div style={{ fontSize: 12.5, color: t.fg1, fontWeight: 600, lineHeight: 1.35 }}>
+          {obs.locName}
+        </div>
+      )}
+
       <div style={{
         display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 10,
         fontSize: 11.5, color: t.fg3, fontFamily: t.mono, marginTop: 6,
       }}>
         <span>{obs.howMany ? `${obs.howMany}×` : '1×'}</span>
         <span>{timeAgo(obs.obsDt)}</span>
+        <span>{formatCoords(obs)}</span>
       </div>
+
       {obs.reportCount != null && obs.reportCount > 1 && (
         <div style={{ fontSize: 11, color: t.fg3, fontFamily: t.mono, marginTop: 4 }}>
           Reported {obs.reportCount}× this week here
+        </div>
+      )}
+
+      {/* Rendered on the URL, not on a disabled button holding a live href —
+          there is nothing here to re-enable. */}
+      {directions ? (
+        <a
+          href={directions}
+          target="_blank"
+          rel="noopener noreferrer"
+          style={{
+            display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6,
+            marginTop: 10, padding: '7px 0',
+            background: t.accentBg, border: `1px solid ${t.accentBorder}`,
+            borderRadius: 8, color: t.accent,
+            fontSize: 12, fontWeight: 600, textDecoration: 'none',
+            fontFamily: t.sans,
+          }}
+        >
+          <NavigationIcon size={12} />
+          Directions
+        </a>
+      ) : (
+        // A silently missing button reads as a bug; say it was a decision.
+        <div style={{
+          marginTop: 8, fontSize: 10.5, color: t.fg3,
+          lineHeight: 1.4, fontStyle: 'italic',
+        }}>
+          {PRIVATE_LOCATION_HINT}
         </div>
       )}
     </div>

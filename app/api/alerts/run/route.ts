@@ -5,11 +5,32 @@ import { fetchEbirdCached } from '@/lib/ebird-proxy';
 import { sendPush, isPushConfigured } from '@/lib/push';
 import { findNewLifers, groupKey, MAX_ALERTS_PER_RUN, type AlertSubscription } from '@/lib/alerts';
 import { mergeObservations, fmtDist, type Observation } from '@/lib/ebird';
+import { isPrivateLocation, PRIVATE_LOCATION_LABEL } from '@/lib/location-privacy';
 
 export const runtime = 'nodejs';
 export const maxDuration = 60;
 
 const ALERTED_TTL_SEC = 7 * 24 * 60 * 60;
+
+/**
+ * Where a push alert says the bird is.
+ *
+ * A personal location is never named — but "Lifer nearby: Anna's Hummingbird ·
+ * Personal location (approximate)" is also useless, and private is the *common*
+ * case (measured: 3 of 3 recent observations in the default search area). An
+ * alert nobody can act on quietly guts the alerts feature, so substitute a coarse
+ * but real locator instead of just withholding.
+ *
+ * County (`subnational2Name`) is only returned under `detail=full`, i.e. by the
+ * notable feed — hence the optional chain rather than an assumption. The caller
+ * always appends the distance from the subscriber, which carries the alert on its
+ * own when no county is available.
+ */
+function alertPlace(obs: Observation): string {
+  if (!isPrivateLocation(obs)) return obs.locName;
+  const region = obs.subnational2Name ?? obs.subnational1Name;
+  return region ? `${PRIVATE_LOCATION_LABEL} in ${region}` : PRIVATE_LOCATION_LABEL;
+}
 
 interface SubRow {
   id: string;
@@ -113,7 +134,7 @@ export async function POST(request: NextRequest) {
       for (const match of fresh) {
         const result = await sendPush(sub.subscription as Parameters<typeof sendPush>[0], {
           title: `🐦 Lifer nearby: ${match.obs.comName}`,
-          body: `${match.obs.locName} · ${fmtDist(match.distKm, sub.useMetric)} away`,
+          body: `${alertPlace(match.obs)} · ${fmtDist(match.distKm, sub.useMetric)} away`,
           url: `/?lat=${match.obs.lat}&lng=${match.obs.lng}&sp=${encodeURIComponent(match.obs.speciesCode)}`,
           tag: match.obs.speciesCode,
         });

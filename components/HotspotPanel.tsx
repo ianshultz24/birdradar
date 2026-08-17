@@ -4,7 +4,8 @@ import { useEffect, useState } from 'react';
 import type { Hotspot, Observation } from '@/lib/ebird';
 import { timeAgo, parseObsDt } from '@/lib/ebird';
 import { getTheme } from '@/lib/theme';
-import { CheckIcon } from '@/components/Icons';
+import { hotspotDirectionsUrl } from '@/lib/location-privacy';
+import { CheckIcon, NavigationIcon } from '@/components/Icons';
 
 interface Props {
   hotspot: Hotspot;
@@ -77,6 +78,25 @@ export default function HotspotPanel({ hotspot, lifeList, onClose, onAddToLifeLi
               {hotspot.latestObsDt && <span style={{ marginLeft: 8 }}>· last obs {timeAgo(hotspot.latestObsDt)}</span>}
             </div>
           </div>
+          {/* Hotspots are public by definition and carry no locationPrivate
+              field — hence hotspotDirectionsUrl rather than the observation
+              variant, which fails closed on a missing flag. */}
+          <a
+            href={hotspotDirectionsUrl(hotspot)}
+            target="_blank"
+            rel="noopener noreferrer"
+            title="Directions to this hotspot"
+            style={{
+              display: 'flex', alignItems: 'center', gap: 5, flexShrink: 0,
+              padding: '5px 9px', borderRadius: 6,
+              background: t.accentBg, border: `1px solid ${t.accentBorder}`,
+              color: t.accent, fontSize: 11, fontWeight: 600,
+              textDecoration: 'none', fontFamily: t.sans,
+            }}
+          >
+            <NavigationIcon size={11} />
+            Directions
+          </a>
         </div>
       </div>
 
