@@ -42,6 +42,22 @@ export const TILE_CREDITS: ReadonlyArray<{ label: string; href: string }> = [
   { label: 'OpenStreetMap', href: 'https://www.openstreetmap.org/copyright' },
 ];
 
+/**
+ * Routing credits — required by OpenRouteService's terms, and by ODbL for the
+ * OpenStreetMap data underneath it. Every matrix response carries
+ * `metadata.attribution` = "openrouteservice.org | OpenStreetMap contributors"
+ * as a standing reminder that this is a condition of use, not a courtesy.
+ *
+ * Rendered in Settings → Credits beside the basemap credits, for the same reason
+ * and under the same rule as TILE_CREDITS above: the credit must be available and
+ * discoverable, not painted over the map. Kept in this file so both licensing
+ * obligations sit together and neither can be dropped without noticing the other.
+ */
+export const ROUTING_CREDITS: ReadonlyArray<{ label: string; href: string }> = [
+  { label: 'openrouteservice', href: 'https://openrouteservice.org/' },
+  { label: 'OpenStreetMap contributors', href: 'https://www.openstreetmap.org/copyright' },
+];
+
 /** Leaflet-control form of the same credits. Still handed to the TileLayer so the
  *  layer declares its own attribution and an attribution control would just work
  *  if one is ever mounted again. */

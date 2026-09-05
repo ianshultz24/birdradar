@@ -32,7 +32,7 @@ import {
 import { getTheme, type Theme } from '@/lib/theme';
 import { getTileLayer } from '@/lib/tiles';
 import { useStableCallback } from '@/hooks/useStableCallback';
-import { RefreshCwIcon, CrosshairIcon, MapPinIcon, XIcon } from '@/components/Icons';
+import { RefreshCwIcon, CrosshairIcon, HelpCircleIcon, XIcon } from '@/components/Icons';
 import { DETAIL_PANEL_WIDTH } from '@/components/SpeciesDetailPanel';
 import MapLegend from '@/components/MapLegend';
 
@@ -89,6 +89,17 @@ const WORLD_BOUNDS: L.LatLngBoundsLiteral = [
 
 /** Floor for the derived minimum zoom — below this the map is useless anyway. */
 const BASE_MIN_ZOOM = 3;
+
+/**
+ * What the map shows before a location has been established.
+ *
+ * A **display** constant, deliberately unrelated to `PENDING_CENTER` in
+ * app/page.tsx: that one is a sentinel nothing may read, this one is the view a
+ * user actually looks at while the permission prompt is unanswered. The old
+ * behaviour opened on a Seattle-suburb centre at zoom 11 for every visitor on
+ * earth and immediately searched it. A continental view claims nothing.
+ */
+const NEUTRAL_VIEW = { center: [39.5, -98.35] as [number, number], zoom: 4 };
 
 /** Zoom step. The derived floor has to land on a real stop, so this is shared
  *  with `zoomSnap` / `zoomDelta` on the MapContainer rather than duplicated —
@@ -211,6 +222,15 @@ function RecenterController({ target, trigger }: { target: [number, number]; tri
 }
 
 // ─── InitialLocationController ────────────────────────────────────────────────
+//
+// Carries the neutral → located transition. `MapContainer`'s `center`/`zoom` are
+// frozen at mount by react-leaflet, so once the map has opened on NEUTRAL_VIEW
+// nothing but an imperative `setView` can move it in.
+//
+// Phase E1 widened its input from `userLocation` to *any* established centre.
+// Keyed on the GPS fix alone, a user who denied permission and dropped a pin —
+// or one running with "Precise location" off — stayed staring at the whole
+// continent while their sightings loaded three zoom levels below the viewport.
 
 const INITIAL_LOCATION_ZOOM = 11;
 
@@ -688,16 +708,32 @@ export interface MapProps {
   focusedSpecies: { code: string; name: string } | null;
   /** locKey of the sighting whose detail panel is open, if any. */
   selectedLocKey: string | null;
+  /** Whether the hotspot detail panel is open. Separate from `selectedLocKey`
+   *  because only the latter highlights a marker — but both occupy the same
+   *  right-hand column, so the legend and the controls have to step aside for
+   *  either one. See `rightPanelOpen` below. */
+  hotspotOpen: boolean;
   isMobile?: boolean;
   loading?: boolean;
   /** Low battery mode — suppresses marker pulse/glow and expensive filters. */
   lowFi?: boolean;
+  /**
+   * Whether `searchCenter` means anything yet. While false the map opens on
+   * NEUTRAL_VIEW, draws no radius circle, and shows the waiting overlay —
+   * app/page.tsx is simultaneously withholding every fetch, so there is nothing
+   * to plot either. See PENDING_CENTER there.
+   */
+  locationResolved: boolean;
+  /** Why there is no location, for the overlay's wording. */
+  locationReason: 'prompt' | 'denied' | 'unavailable' | null;
   onSelectSighting: (locKey: string) => void;
   onCloseDetail: () => void;
   onHotspotDetail: (hs: Hotspot) => void;
   onPinDrop: (lat: number, lng: number) => void;
   onClearPin: () => void;
   onRefreshNow?: () => void;
+  /** Re-opens the first-visit intro. */
+  onOpenHelp: () => void;
 }
 
 export default function BirdMap({
@@ -713,15 +749,19 @@ export default function BirdMap({
   userAccuracyM,
   focusedSpecies,
   selectedLocKey,
+  hotspotOpen,
   isMobile,
   loading,
   lowFi = false,
+  locationResolved,
+  locationReason,
   onSelectSighting,
   onCloseDetail,
   onHotspotDetail,
   onPinDrop,
   onClearPin,
   onRefreshNow,
+  onOpenHelp,
 }: MapProps) {
   const [isPinMode, setIsPinMode] = useState(false);
   const [reCenterTrigger, setReCenterTrigger] = useState(0);
@@ -732,11 +772,20 @@ export default function BirdMap({
   const closeDetail = useStableCallback(onCloseDetail);
   const hotspotDetail = useStableCallback(onHotspotDetail);
   const clearPin = useStableCallback(onClearPin);
+  const openHelp = useStableCallback(onOpenHelp);
   const stableRefresh = useStableCallback(onRefreshNow ?? noop);
   const refreshNow = onRefreshNow ? stableRefresh : undefined;
 
   const togglePinMode = useCallback(() => setIsPinMode(v => !v), []);
   const reCenter = useCallback(() => setReCenterTrigger(n => n + 1), []);
+
+  /**
+   * Something is occupying the right-hand column. Both the legend and the
+   * controls take this as `detailOpen`, and both must take the SAME value —
+   * the sighting panel and the hotspot panel are the same width, in the same
+   * place, and either one covers whichever is not told to move.
+   */
+  const rightPanelOpen = !!selectedLocKey || hotspotOpen;
 
   const reCenterTarget = useMemo<[number, number]>(
     () => userLocation ?? searchCenter,
@@ -812,8 +861,11 @@ export default function BirdMap({
   return (
     <div className={lightMode ? '' : 'dark'} style={{ position: 'relative', height: '100%', width: '100%' }}>
       <MapContainer
-        center={searchCenter}
-        zoom={11}
+        // react-leaflet freezes these at mount, so they are the *opening* view
+        // and nothing else; InitialLocationController moves the map in once a
+        // centre is established.
+        center={locationResolved ? searchCenter : NEUTRAL_VIEW.center}
+        zoom={locationResolved ? 11 : NEUTRAL_VIEW.zoom}
         // Floor only — ViewportFitController raises it whenever the container is
         // larger than the world at this zoom. See the world-bounds block up top.
         minZoom={BASE_MIN_ZOOM}
@@ -868,12 +920,12 @@ export default function BirdMap({
 
         <MapController target={flyToTarget} />
         <RecenterController target={reCenterTarget} trigger={reCenterTrigger} />
-        <InitialLocationController location={userLocation} />
+        <InitialLocationController location={locationResolved ? searchCenter : null} />
         <MapClickHandler isPinMode={isPinMode} onMapClick={handleMapClick} onDismiss={closeDetail} />
         <CursorController isPinMode={isPinMode} />
         <ViewportFitController />
 
-        {settings.showRadiusCircle && (
+        {settings.showRadiusCircle && locationResolved && (
           <Circle
             center={searchCenter}
             radius={searchRadiusKm * 1000}
@@ -985,16 +1037,31 @@ export default function BirdMap({
         lightMode={lightMode}
         isMobile={!!isMobile}
         lowFi={lowFi}
-        detailOpen={!!selectedLocKey}
+        detailOpen={rightPanelOpen}
         pulseEnabled={pulseEnabled}
       />
+
+      {/* Waiting for a location. A sibling of MapContainer like the controls, so
+          Leaflet never sees its clicks. `pointerEvents: 'none'` on the wrapper
+          keeps panning and zooming alive underneath — the user is allowed to
+          look around while deciding. */}
+      {!locationResolved && (
+        <NeutralLocationOverlay
+          theme={theme}
+          isMobile={!!isMobile}
+          lowFi={lowFi}
+          reason={locationReason}
+          isPinMode={isPinMode}
+          onPickSpot={togglePinMode}
+        />
+      )}
 
       <MapControls
         theme={theme}
         isMobile={!!isMobile}
         loading={!!loading}
         lowFi={lowFi}
-        detailOpen={!!selectedLocKey}
+        detailOpen={rightPanelOpen}
         isPinMode={isPinMode}
         hasUserLocation={!!userLocation}
         hasPin={!!pinLocation}
@@ -1002,10 +1069,84 @@ export default function BirdMap({
         onTogglePinMode={togglePinMode}
         onReCenter={reCenter}
         onClearPin={clearPin}
+        onOpenHelp={openHelp}
       />
     </div>
   );
 }
+
+// ─── Neutral-state overlay ────────────────────────────────────────────────────
+// Shown only while no location has been established. It exists because the
+// honest alternative — an empty continental map with no explanation — reads as a
+// broken app, and because the one action that *can* resolve the situation
+// without the browser's permission sheet is the pin drop, which belongs on
+// screen at exactly this moment.
+
+const NeutralLocationOverlay = memo(function NeutralLocationOverlay({
+  theme: t,
+  isMobile,
+  lowFi,
+  reason,
+  isPinMode,
+  onPickSpot,
+}: {
+  theme: Theme;
+  isMobile: boolean;
+  lowFi: boolean;
+  reason: 'prompt' | 'denied' | 'unavailable' | null;
+  isPinMode: boolean;
+  onPickSpot: () => void;
+}) {
+  const headline =
+    reason === 'denied' ? 'Location is blocked'
+    : reason === 'unavailable' ? 'Couldn’t get your location'
+    : 'Waiting for location permission';
+  const detail =
+    reason === 'denied' ? 'Allow location in your browser’s address bar, or pick a spot on the map.'
+    : reason === 'unavailable' ? 'Pick a spot on the map to search there instead.'
+    : 'Allow it and BirdRadar will search around you. Nothing is searched until then.';
+
+  return (
+    <div style={{
+      position: 'absolute', inset: 0, zIndex: 1000,
+      display: 'flex', alignItems: 'center', justifyContent: 'center',
+      padding: 16, pointerEvents: 'none',
+    }}>
+      <div style={{
+        pointerEvents: 'auto',
+        maxWidth: isMobile ? '92vw' : 380,
+        background: t.cardBg, border: `1px solid ${t.line2}`,
+        borderRadius: 12, boxShadow: t.shadowLg,
+        backdropFilter: lowFi ? undefined : 'blur(8px)',
+        padding: '16px 18px', textAlign: 'center', fontFamily: t.sans,
+      }}>
+        <div style={{
+          fontSize: 15, fontWeight: 700, fontFamily: t.display,
+          color: t.fg0, letterSpacing: '-0.02em',
+        }}>
+          {headline}
+        </div>
+        <div style={{ fontSize: 12, color: t.fg2, lineHeight: 1.5, marginTop: 6 }}>
+          {detail}
+        </div>
+        <button
+          onClick={onPickSpot}
+          style={{
+            marginTop: 12, padding: '8px 14px', borderRadius: 8,
+            display: 'inline-flex', alignItems: 'center', gap: 7,
+            background: isPinMode ? t.accent : t.accentBg,
+            border: `1px solid ${isPinMode ? t.accent : t.accentBorder}`,
+            color: isPinMode ? t.accentFg : t.accent,
+            fontSize: 12.5, fontWeight: 600, fontFamily: t.sans, cursor: 'pointer',
+          }}
+        >
+          <CrosshairIcon size={13} />
+          {isPinMode ? 'Now tap the map' : 'Pick a spot on the map'}
+        </button>
+      </div>
+    </div>
+  );
+});
 
 // ─── Map overlay controls ─────────────────────────────────────────────────────
 // Owns its own hover state. It used to live in BirdMap, which meant simply moving
@@ -1024,6 +1165,7 @@ const MapControls = memo(function MapControls({
   onTogglePinMode,
   onReCenter,
   onClearPin,
+  onOpenHelp,
 }: {
   theme: Theme;
   isMobile: boolean;
@@ -1038,6 +1180,7 @@ const MapControls = memo(function MapControls({
   onTogglePinMode: () => void;
   onReCenter: () => void;
   onClearPin: () => void;
+  onOpenHelp: () => void;
 }) {
   const [hovered, setHovered] = useState<string | null>(null);
 
@@ -1064,6 +1207,66 @@ const MapControls = memo(function MapControls({
       display: 'flex', flexDirection: 'column', gap: 6, alignItems: 'flex-end',
       transition: lowFi ? undefined : 'right 0.24s cubic-bezier(0.32, 0.72, 0, 1)',
     }}>
+      {/* Pin mode hint. Arming pin mode used to change only the cursor
+          (CursorController), which says nothing at all on a touch screen — the
+          user tapped "Pick a Spot", saw no change, and tapped it again to turn
+          it back off. */}
+      {isPinMode && (
+        <div style={{
+          padding: '5px 10px', borderRadius: 8,
+          background: theme.accent, color: theme.accentFg,
+          fontSize: 11, fontWeight: 600, fontFamily: theme.sans,
+          boxShadow: theme.shadowLg, whiteSpace: 'nowrap',
+        }}>
+          Tap the map to search there
+        </div>
+      )}
+
+      {/* Pick a Spot — first in the stack.
+          It was third, behind Refresh and Center, and labelled "Drop Pin": a
+          mechanism, not a purpose. It is the app's only way to look somewhere
+          you are not, and users were not finding it. The crosshair glyph is the
+          same mark `pinSearchGlyph()` puts on the map and the same one the
+          legend calls "Custom search location", so the button, the marker and
+          the legend now agree. */}
+      <button
+        onClick={onTogglePinMode}
+        title="Search a different area — tap anywhere on the map"
+        onMouseEnter={() => setHovered('pin')}
+        onMouseLeave={() => setHovered(null)}
+        style={{
+          ...btnBase,
+          background: isPinMode ? theme.accent : hovered === 'pin' ? theme.bg2 : theme.cardBg,
+          border: `1px solid ${isPinMode ? theme.accent : theme.line2}`,
+          color: isPinMode ? theme.accentFg : theme.fg1,
+          transform: hovered === 'pin' && !isPinMode ? 'translateY(-1px)' : 'none',
+        }}
+      >
+        {isPinMode ? <XIcon size={13}/> : <CrosshairIcon size={13}/>}
+        {isPinMode ? 'Cancel' : 'Pick a Spot'}
+      </button>
+
+      {/* Clear Pin — directly under the control that set it */}
+      {hasPin && (
+        <button
+          onClick={onClearPin}
+          onMouseEnter={() => setHovered('clearpin')}
+          onMouseLeave={() => setHovered(null)}
+          style={{
+            ...btnBase,
+            padding: '6px 10px',
+            background: hovered === 'clearpin' ? 'rgba(239,68,68,0.1)' : theme.cardBg,
+            border: '1px solid rgba(239,68,68,0.35)',
+            color: '#EF4444',
+            fontSize: 11,
+            transform: hovered === 'clearpin' ? 'translateY(-1px)' : 'none',
+          }}
+        >
+          <XIcon size={12}/>
+          Clear Pin
+        </button>
+      )}
+
       {/* Refresh */}
       {onRefreshNow && (
         <button
@@ -1102,43 +1305,25 @@ const MapControls = memo(function MapControls({
         Center
       </button>
 
-      {/* Drop Pin / Cancel */}
+      {/* Help — re-opens the first-visit intro. Icon-only: it is the least
+          important control here and must not compete for width with the two
+          above it. */}
       <button
-        onClick={onTogglePinMode}
-        onMouseEnter={() => setHovered('pin')}
+        onClick={onOpenHelp}
+        title="How BirdRadar works"
+        aria-label="How BirdRadar works"
+        onMouseEnter={() => setHovered('help')}
         onMouseLeave={() => setHovered(null)}
         style={{
           ...btnBase,
-          background: isPinMode ? theme.accent : hovered === 'pin' ? theme.bg2 : theme.cardBg,
-          border: `1px solid ${isPinMode ? theme.accent : theme.line2}`,
-          color: isPinMode ? theme.accentFg : theme.fg1,
-          transform: hovered === 'pin' && !isPinMode ? 'translateY(-1px)' : 'none',
+          padding: '7px 8px',
+          background: hovered === 'help' ? theme.bg2 : theme.cardBg,
+          color: theme.fg2,
+          transform: hovered === 'help' ? 'translateY(-1px)' : 'none',
         }}
       >
-        <MapPinIcon size={13}/>
-        {isPinMode ? 'Cancel' : 'Drop Pin'}
+        <HelpCircleIcon size={14}/>
       </button>
-
-      {/* Clear Pin */}
-      {hasPin && (
-        <button
-          onClick={onClearPin}
-          onMouseEnter={() => setHovered('clearpin')}
-          onMouseLeave={() => setHovered(null)}
-          style={{
-            ...btnBase,
-            padding: '6px 10px',
-            background: hovered === 'clearpin' ? 'rgba(239,68,68,0.1)' : theme.cardBg,
-            border: '1px solid rgba(239,68,68,0.35)',
-            color: '#EF4444',
-            fontSize: 11,
-            transform: hovered === 'clearpin' ? 'translateY(-1px)' : 'none',
-          }}
-        >
-          <XIcon size={12}/>
-          Clear Pin
-        </button>
-      )}
     </div>
   );
 });

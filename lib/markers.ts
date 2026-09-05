@@ -29,15 +29,28 @@ export function visibleObservations(
     : observations.filter((o) => o.tier !== 'seen' && o.tier !== 'rare');
 }
 
+/**
+ * The location identity of one observation.
+ *
+ * Falls back to coordinates, not locName — two distinct points sharing a name
+ * would otherwise collide onto one marker (and one React key).
+ *
+ * Exported because drive time is computed per *location*, not per observation,
+ * and the sidebar list has to filter individual observations by the same key the
+ * map filters groups by. Two hand-rolled copies of this expression is exactly how
+ * the list and the map would come to disagree about what they are showing.
+ */
+export function locKeyOf(obs: Pick<ClassifiedObservation, 'locId' | 'lat' | 'lng'>): string {
+  return obs.locId || `${obs.lat},${obs.lng}`;
+}
+
 export function buildMarkerGroups(
   observations: ClassifiedObservation[],
   dimSeenSpecies: boolean,
 ): MarkerGroup[] {
   const groups = new Map<string, ClassifiedObservation[]>();
   for (const obs of visibleObservations(observations, dimSeenSpecies)) {
-    // Fall back to coordinates, not locName — two distinct points sharing a
-    // name would otherwise collide onto one marker (and one React key).
-    const key = obs.locId || `${obs.lat},${obs.lng}`;
+    const key = locKeyOf(obs);
     if (!groups.has(key)) groups.set(key, []);
     groups.get(key)!.push(obs);
   }

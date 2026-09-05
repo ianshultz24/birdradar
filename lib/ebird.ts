@@ -71,6 +71,28 @@ export interface AppSettings {
   /** Disables marker pulse/glow and drop shadows. On by default; also forced on
    *  when the OS reports `prefers-reduced-motion: reduce`. */
   lowBatteryMode: boolean;
+  /** "Reachable only" — hide sightings further than `driveTimeMaxMin` by road.
+   *  Off by default: it hides data, so it must be asked for. Turning it on makes
+   *  drive-time fetching eager for the whole result set (see app/page.tsx) — a
+   *  filter that only knew about scrolled-past cards would hide an arbitrary
+   *  subset. Sightings with no known drive time are never hidden. */
+  driveTimeReachableOnly: boolean;
+  /** Drive-time tolerance in minutes, used only when `driveTimeReachableOnly`. */
+  driveTimeMaxMin: number;
+  /**
+   * Use the browser's precise geolocation. **On by default.**
+   *
+   * ON  — the app asks for the geolocation permission and uses the fix it gets.
+   *       While the permission is unresolved or denied it shows a neutral view
+   *       and searches nothing. It NEVER falls back to an IP estimate: guessing
+   *       a location the user has not granted is the exact bug Phase E1 exists
+   *       to remove, and doing it on denial would only rename it.
+   * OFF — the app does not call `getCurrentPosition` at all and asks
+   *       `/api/geo-estimate` for a coarse area derived from the connection.
+   *
+   * See lib/geolocation.ts, which is the only module allowed to resolve either.
+   */
+  preciseLocation: boolean;
 }
 
 export const DEFAULT_SETTINGS: AppSettings = {
@@ -87,6 +109,9 @@ export const DEFAULT_SETTINGS: AppSettings = {
   showRadiusCircle: false,
   showRadarAnimation: false,
   lowBatteryMode: true,
+  driveTimeReachableOnly: false,
+  driveTimeMaxMin: 30,
+  preciseLocation: true,
 };
 
 export function fmtDist(km: number, useMetric = true): string {

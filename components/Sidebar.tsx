@@ -6,11 +6,11 @@ import type { SpeciesMeta } from '@/lib/lifelist';
 import type { ArrivingSpecies } from '@/lib/forecast';
 import type { SyncPayload } from '@/lib/sync-client';
 import { getTheme } from '@/lib/theme';
+import type { SortMode } from '@/lib/alerts-sort';
 import { BellIcon, BirdIcon, SettingsIcon } from '@/components/Icons';
 import AlertsPanel from './AlertsPanel';
 import LifeListPanel from './LifeListPanel';
 import SettingsPanel from './SettingsPanel';
-import HotspotPanel from './HotspotPanel';
 
 type Tab = 'alerts' | 'lifelist' | 'settings';
 
@@ -26,11 +26,18 @@ interface Props {
   lifeListMeta: Record<string, SpeciesMeta>;
   targetSpecies: TargetSpecies[];
   arrivingSpecies: ArrivingSpecies[];
-  hotspotPanel: Hotspot | null;
   settings: AppSettings;
   apiStatus: 'ok' | 'error' | 'loading';
   loading: boolean;
   userCenter: [number, number];
+  /** False while no location has been established — `userCenter` is a sentinel
+   *  then (PENDING_CENTER in app/page.tsx). Only Settings acts on it: the alerts
+   *  list is empty in that state anyway, because nothing has been fetched. */
+  locationResolved: boolean;
+  /** The user's GPS fix, for drive-time badges and the "reachable only" filter.
+   *  Distinct from `userCenter`, which follows a dropped pin — a pin moves where
+   *  you search, not where you are driving from. */
+  driveOrigin: [number, number] | null;
   focusedSpecies: { code: string; name: string } | null;
   onFlyTo: (lat: number, lng: number) => void;
   onFocusSpecies: (code: string, name: string) => void;
@@ -43,7 +50,6 @@ interface Props {
   onClearYearList: () => void;
   onSettingsChange: (s: AppSettings) => void;
   onRefreshNow: () => void;
-  onCloseHotspotPanel: () => void;
   onSyncMerge: (payload: SyncPayload) => void;
   /** OS-level reduced-motion preference — forces low battery mode on */
   prefersReducedMotion: boolean;
@@ -59,14 +65,31 @@ export default function Sidebar(props: Props) {
   const {
     activeTab, onTabChange, isMobile, drawerOpen,
     observations, lifeList, yearList, lifeListMeta, targetSpecies, arrivingSpecies,
-    hotspotPanel, settings, apiStatus, loading, userCenter,
+    settings, apiStatus, loading, userCenter, locationResolved, driveOrigin,
     focusedSpecies, onFlyTo, onFocusSpecies,
     onAddToLifeList, onRemoveFromLifeList, onAddToYearList, onRemoveFromYearList,
     onBulkImport, onClearLifeList, onClearYearList, onSettingsChange,
-    onRefreshNow, onCloseHotspotPanel, onSyncMerge, prefersReducedMotion,
+    onRefreshNow, onSyncMerge, prefersReducedMotion,
   } = props;
 
   const [hoveredTab, setHoveredTab] = useState<Tab | null>(null);
+
+  // ─── Alerts list controls live here, not in AlertsPanel ───────────────────
+  // `panelContent` below renders `{activeTab === 'alerts' && <AlertsPanel/>}`, so
+  // every tab switch unmounts that component and re-runs its `useState`
+  // initialisers. With the sort mode owned there, picking "Closest", glancing at
+  // Settings and coming back silently reverted to "Recent" — half of the Phase E1
+  // "the sort does nothing" report.
+  //
+  // Sidebar is the right home rather than app/page.tsx: it is mounted for the
+  // life of the page in BOTH layouts — the mobile branch renders its drawer
+  // unconditionally and hides it with `transform: translateY(100%)`, so closing
+  // the drawer does not unmount this component — and no other consumer needs the
+  // sort mode. Verified, not assumed: a `{drawerOpen && …}` here instead of the
+  // transform would reproduce the bug on mobile only, where the 1920-wide test
+  // harness cannot see it.
+  const [sortBy, setSortBy] = useState<SortMode>('recent');
+  const [searchQuery, setSearchQuery] = useState('');
 
   const lm = settings.lightMode;
   const t = getTheme(lm);
@@ -95,8 +118,22 @@ export default function Sidebar(props: Props) {
           useMetric={settings.useMetric}
           userCenter={userCenter}
           focusedSpecies={focusedSpecies}
+          driveOrigin={driveOrigin}
+          driveTimeReachableOnly={settings.driveTimeReachableOnly}
+          driveTimeMaxMin={settings.driveTimeMaxMin}
+          sortBy={sortBy}
+          onSortByChange={setSortBy}
+          searchQuery={searchQuery}
+          onSearchQueryChange={setSearchQuery}
           onFlyTo={onFlyTo}
           onFocusSpecies={onFocusSpecies}
+          onDriveTimeFilterChange={(reachableOnly, maxMin) =>
+            onSettingsChange({
+              ...settings,
+              driveTimeReachableOnly: reachableOnly,
+              driveTimeMaxMin: maxMin,
+            })
+          }
         />
       )}
       {activeTab === 'lifelist' && (
@@ -125,6 +162,7 @@ export default function Sidebar(props: Props) {
           onRefreshNow={onRefreshNow}
           loading={loading}
           alertCenter={userCenter}
+          locationResolved={locationResolved}
           lifeList={lifeList}
           yearList={yearList}
           lifeListMeta={lifeListMeta}
@@ -132,16 +170,12 @@ export default function Sidebar(props: Props) {
           prefersReducedMotion={prefersReducedMotion}
         />
       )}
-
-      {hotspotPanel && (
-        <HotspotPanel
-          hotspot={hotspotPanel}
-          lifeList={lifeList}
-          onClose={onCloseHotspotPanel}
-          onAddToLifeList={onAddToLifeList}
-          lightMode={lm}
-        />
-      )}
+      {/* HotspotPanel used to overlay this stack at `inset: 0`. It now lives in
+          app/page.tsx as a right-hand panel over the map, alongside
+          SpeciesDetailPanel — clicking a hotspot must not cover the observation
+          list. `position: relative` above stays: it is the containing block the
+          panels' shells are measured against elsewhere, and removing it here is
+          unrelated churn. */}
     </div>
   );
 

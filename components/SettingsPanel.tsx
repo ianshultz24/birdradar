@@ -12,7 +12,8 @@ import {
 } from '@/lib/sync-client';
 import { getTheme, type Theme } from '@/lib/theme';
 import { legendRows, LEGEND_SECTION_LABELS, type LegendSection } from '@/lib/marker-style';
-import { TILE_CREDITS } from '@/lib/tiles';
+import { TILE_CREDITS, ROUTING_CREDITS } from '@/lib/tiles';
+import { donationUrl } from '@/lib/donation';
 import { RefreshCwIcon, WifiIcon, WifiOffIcon } from '@/components/Icons';
 import { LegendEntry } from '@/components/MapLegend';
 
@@ -24,6 +25,9 @@ interface Props {
   loading: boolean;
   /** Where background push alerts watch — the current search center */
   alertCenter: [number, number];
+  /** False while no location has been established. `alertCenter` is a sentinel
+   *  then (PENDING_CENTER in app/page.tsx) and must not be subscribed to. */
+  locationResolved: boolean;
   /** Life-list snapshot sent with the subscription so already-seen species don't alert */
   lifeList: string[];
   yearList: string[];
@@ -35,7 +39,7 @@ interface Props {
 }
 
 export default function SettingsPanel({
-  settings, onChange, apiStatus, onRefreshNow, loading, alertCenter,
+  settings, onChange, apiStatus, onRefreshNow, loading, alertCenter, locationResolved,
   lifeList, yearList, lifeListMeta, onSyncMerge, prefersReducedMotion,
 }: Props) {
   const t = getTheme(settings.lightMode);
@@ -156,6 +160,19 @@ export default function SettingsPanel({
             <span>{minLabel}</span><span>{maxLabel}</span>
           </div>
         </div>
+        {/* Lives under Search, not Map Display: it governs *where* the app
+            searches, not how the map looks. */}
+        <Row t={t} last>
+          <RowToggle
+            label="Precise location"
+            hint={settings.preciseLocation
+              ? 'Uses your device GPS. Nothing is searched until you allow it.'
+              : 'Off — uses an approximate area from your connection'}
+            checked={settings.preciseLocation}
+            onChange={v => set('preciseLocation', v)}
+            t={t}
+          />
+        </Row>
       </Group>
 
       <Group label="Auto-Refresh" t={t}>
@@ -194,6 +211,7 @@ export default function SettingsPanel({
         <PushAlertsControl
           t={t}
           alertCenter={alertCenter}
+          locationResolved={locationResolved}
           radiusKm={settings.searchRadius}
           lifeList={lifeList}
           useMetric={settings.useMetric}
@@ -275,6 +293,38 @@ export default function SettingsPanel({
         </div>
       </Group>
 
+      {/* Support — the permanent counterpart to the donation banner. It is
+          unconditional: no session gate, no snooze, no PostHog event. Someone
+          who dismissed the banner two weeks ago, or who will never meet its
+          engagement triggers at all, still has a way to give. The banner is the
+          ask; this is the answer to "how do I support this?" asked unprompted,
+          and the two must not be able to disappear together.
+
+          No event on purpose — the brief names three prompt-scoped events, and a
+          fourth would put un-asked-for data in Eastside Audubon's funnel. The
+          `donate_settings` campaign is how this surface is told apart downstream. */}
+      <Group label="Support" t={t}>
+        <div style={{ padding: '12px 20px 16px' }}>
+          <div style={{
+            fontSize: 12, color: t.fg2, fontFamily: t.sans, lineHeight: 1.6, marginBottom: 10,
+          }}>
+            BirdRadar is free and supports Eastside Audubon.
+          </div>
+          <a
+            href={donationUrl('donate_settings')}
+            target="_blank"
+            rel="noopener noreferrer"
+            style={{
+              display: 'inline-block',
+              color: t.accent, textDecoration: 'none',
+              fontSize: 13, fontWeight: 600, fontFamily: t.sans,
+            }}
+          >
+            Support Eastside Audubon →
+          </a>
+        </div>
+      </Group>
+
       {/* Credits — this is where the basemap attribution lives now. Leaflet's
           corner control is switched off in components/Map.tsx; Stadia's and
           OpenStreetMap's terms require the credit to be available and
@@ -293,6 +343,33 @@ export default function SettingsPanel({
             fontSize: 12, color: t.fg2, fontFamily: t.sans, lineHeight: 1.7, marginBottom: 12,
           }}>
             {TILE_CREDITS.map((c, i) => (
+              <span key={c.href}>
+                {i > 0 && <span style={{ color: t.fg4 }}> · </span>}
+                ©{' '}
+                <a
+                  href={c.href}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  style={{ color: t.accent, textDecoration: 'none' }}
+                >
+                  {c.label}
+                </a>
+              </span>
+            ))}
+          </div>
+
+          {/* Required by OpenRouteService's terms and by ODbL for the OSM data
+              beneath it — same rule as the basemap credits above. Not optional. */}
+          <div style={{
+            fontSize: 9.5, fontWeight: 700, fontFamily: t.mono, color: t.fg3,
+            letterSpacing: '0.08em', textTransform: 'uppercase', marginBottom: 7,
+          }}>
+            Drive times
+          </div>
+          <div style={{
+            fontSize: 12, color: t.fg2, fontFamily: t.sans, lineHeight: 1.7, marginBottom: 12,
+          }}>
+            {ROUTING_CREDITS.map((c, i) => (
               <span key={c.href}>
                 {i > 0 && <span style={{ color: t.fg4 }}> · </span>}
                 ©{' '}
@@ -332,9 +409,10 @@ export default function SettingsPanel({
   );
 }
 
-function PushAlertsControl({ t, alertCenter, radiusKm, lifeList, useMetric, alertRadiusLabel }: {
+function PushAlertsControl({ t, alertCenter, locationResolved, radiusKm, lifeList, useMetric, alertRadiusLabel }: {
   t: Theme;
   alertCenter: [number, number];
+  locationResolved: boolean;
   radiusKm: number;
   lifeList: string[];
   useMetric: boolean;
@@ -403,7 +481,11 @@ function PushAlertsControl({ t, alertCenter, radiusKm, lifeList, useMetric, aler
           <>
             <button
               onClick={toggle}
-              disabled={busy}
+              // "This location" has to be a location. Subscribing against the
+              // pending sentinel would register a watcher in the Gulf of Guinea
+              // and quietly never alert. Unsubscribing stays available either
+              // way — turning something off must never need a location.
+              disabled={busy || (!locationResolved && !subscribed)}
               onMouseEnter={() => setHov(true)}
               onMouseLeave={() => setHov(false)}
               style={{
@@ -415,9 +497,15 @@ function PushAlertsControl({ t, alertCenter, radiusKm, lifeList, useMetric, aler
                 color: subscribed ? '#EF4444' : t.accent,
                 fontSize: 13, fontWeight: 600, cursor: busy ? 'default' : 'pointer',
                 fontFamily: t.sans, transition: 'all 0.15s',
+                opacity: !locationResolved && !subscribed ? 0.5 : 1,
               }}>
               {busy ? 'Working…' : subscribed ? 'Turn off background alerts' : 'Alert me at this location'}
             </button>
+            {!locationResolved && !subscribed && (
+              <div style={{ marginTop: 8, fontSize: 11, color: t.fg3, fontFamily: t.mono, textAlign: 'center' }}>
+                Needs a location first
+              </div>
+            )}
             {subscribed && (
               <div style={{ marginTop: 8, fontSize: 11, color: t.lifer, fontFamily: t.mono, textAlign: 'center' }}>
                 ● Watching this location · life list synced

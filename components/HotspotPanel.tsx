@@ -5,7 +5,27 @@ import type { Hotspot, Observation } from '@/lib/ebird';
 import { timeAgo, parseObsDt } from '@/lib/ebird';
 import { getTheme } from '@/lib/theme';
 import { hotspotDirectionsUrl } from '@/lib/location-privacy';
-import { CheckIcon, NavigationIcon } from '@/components/Icons';
+import { CheckIcon, NavigationIcon, XIcon } from '@/components/Icons';
+import { DETAIL_PANEL_WIDTH } from '@/components/SpeciesDetailPanel';
+
+/**
+ * Hotspot detail — a right-hand panel over the map, not a sidebar overlay.
+ *
+ * It used to render inside Sidebar at `position: absolute; inset: 0`, covering
+ * the Alerts list. Clicking a bird pin and clicking a hotspot diamond are the
+ * same gesture on the same map, and they landed in two different places — and
+ * the one the hotspot took over is where *observations* live. phaseB_rationale.md
+ * §3.3 put it there because this component already existed in the sidebar; §3.4
+ * and §3.6 of the same document established the right-hand panel as the pattern
+ * for "clicked a map object". This now follows it.
+ *
+ * The shell is deliberately identical to SpeciesDetailPanel's — same width
+ * constant, same z-index, same mobile bottom sheet, same slide-in, same Escape
+ * handler. Two panels that occupy the same slot must not drift apart.
+ *
+ * The parent keys this on `locId`, so switching hotspots remounts it and resets
+ * the fetch state.
+ */
 
 interface Props {
   hotspot: Hotspot;
@@ -13,27 +33,43 @@ interface Props {
   onClose: () => void;
   onAddToLifeList: (code: string, name: string, sciName?: string) => void;
   lightMode: boolean;
+  isMobile: boolean;
+  /** Low battery / reduced motion — drops the slide-in, matching the map controls. */
+  reduceMotion: boolean;
 }
 
-export default function HotspotPanel({ hotspot, lifeList, onClose, onAddToLifeList, lightMode }: Props) {
+export default function HotspotPanel({
+  hotspot, lifeList, onClose, onAddToLifeList, lightMode, isMobile, reduceMotion,
+}: Props) {
   const [obs, setObs] = useState<Observation[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(false);
-  const [shownLocId, setShownLocId] = useState(hotspot.locId);
   const [hoveredCode, setHoveredCode] = useState<string | null>(null);
   const [hoveredAddCode, setHoveredAddCode] = useState<string | null>(null);
-  const [backHov, setBackHov] = useState(false);
   const t = getTheme(lightMode);
   const lifeSet = new Set(lifeList);
 
-  // Reset display state synchronously during render when the hotspot changes
-  // (React-blessed "adjust state on prop change" pattern — avoids set-state-in-effect).
-  if (shownLocId !== hotspot.locId) {
-    setShownLocId(hotspot.locId);
-    setObs([]);
-    setLoading(true);
-    setError(false);
-  }
+  // No adjust-state-on-prop-change block for a changed `locId`. The parent keys
+  // this component on it, so a different hotspot is a remount and `obs`,
+  // `loading` and `error` reset for free — phaseB_rationale.md §3.4's reasoning
+  // for SpeciesDetailPanel. Two mechanisms resetting the same state is how one
+  // of them gets a case wrong.
+
+  // Slide in on mount. Reduced motion skips straight to the resting position.
+  const [entered, setEntered] = useState(reduceMotion);
+  useEffect(() => {
+    if (reduceMotion) return;
+    const id = requestAnimationFrame(() => setEntered(true));
+    return () => cancelAnimationFrame(id);
+  }, [reduceMotion]);
+
+  useEffect(() => {
+    function onKeyDown(e: KeyboardEvent) {
+      if (e.key === 'Escape') onClose();
+    }
+    document.addEventListener('keydown', onKeyDown);
+    return () => document.removeEventListener('keydown', onKeyDown);
+  }, [onClose]);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -53,22 +89,54 @@ export default function HotspotPanel({ hotspot, lifeList, onClose, onAddToLifeLi
     return () => controller.abort();
   }, [hotspot.locId]);
 
+  // Same two branches as SpeciesDetailPanel.tsx, down to the constants. On
+  // desktop MapControls steps left by exactly DETAIL_PANEL_WIDTH + 10, so a
+  // second width here would put the controls under this panel.
+  const shellStyle: React.CSSProperties = isMobile
+    ? {
+        position: 'fixed', left: 0, right: 0,
+        // Clears the mobile tab bar. The sidebar drawer and the species sheet sit
+        // at the same offset and all three are mutually exclusive — see
+        // openDrawer / handleHotspotDetail / handleSelectSighting in app/page.tsx.
+        bottom: 56,
+        maxHeight: '60vh',
+        borderTop: `1px solid ${t.line2}`,
+        borderRadius: '12px 12px 0 0',
+        boxShadow: '0 -4px 24px rgba(0,0,0,0.16)',
+        transform: entered ? 'translateY(0)' : 'translateY(100%)',
+        zIndex: 1199,
+      }
+    : {
+        position: 'absolute', top: 0, right: 0, bottom: 0,
+        width: DETAIL_PANEL_WIDTH,
+        borderLeft: `1px solid ${t.line2}`,
+        boxShadow: '-4px 0 24px rgba(0,0,0,0.10)',
+        transform: entered ? 'translateX(0)' : `translateX(${DETAIL_PANEL_WIDTH}px)`,
+        // Above the map controls (1001), which shift left to make room.
+        zIndex: 1002,
+      };
+
   return (
-    <div style={{ position: 'absolute', inset: 0, background: t.bg1, display: 'flex', flexDirection: 'column', zIndex: 10 }}>
+    <div
+      role="dialog"
+      aria-label={`${hotspot.locName} hotspot details`}
+      style={{
+        ...shellStyle,
+        background: t.bg1,
+        display: 'flex', flexDirection: 'column', overflow: 'hidden',
+        fontFamily: t.sans,
+        transition: reduceMotion ? undefined : 'transform 0.24s cubic-bezier(0.32, 0.72, 0, 1)',
+      }}
+    >
+      {isMobile && (
+        <div style={{ display: 'flex', justifyContent: 'center', paddingTop: 8, flexShrink: 0 }}>
+          <div style={{ width: 32, height: 3, borderRadius: 2, background: t.line3 }} />
+        </div>
+      )}
 
       {/* Header */}
       <div style={{ padding: '14px 16px', borderBottom: `1px solid ${t.line2}`, background: t.bg2, flexShrink: 0 }}>
         <div style={{ display: 'flex', alignItems: 'flex-start', gap: 10 }}>
-          <button
-            onClick={onClose}
-            onMouseEnter={() => setBackHov(true)}
-            onMouseLeave={() => setBackHov(false)}
-            style={{
-              background: backHov ? t.bg3 : 'transparent', border: `1px solid ${t.line2}`,
-              color: t.fg2, cursor: 'pointer', fontSize: 14, lineHeight: 1,
-              padding: '5px 8px', borderRadius: 6, flexShrink: 0,
-              transition: 'background 0.12s',
-            }}>←</button>
           <div style={{ flex: 1, minWidth: 0 }}>
             <div style={{ fontSize: 14, fontWeight: 600, color: t.fg0, fontFamily: t.display, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
               {hotspot.locName}
@@ -97,6 +165,20 @@ export default function HotspotPanel({ hotspot, lifeList, onClose, onAddToLifeLi
             <NavigationIcon size={11} />
             Directions
           </a>
+          {/* ✕, not the ← this used to be. A back arrow implied a stack to pop
+              inside the sidebar; this panel sits over the map and there is
+              nothing behind it to go back to. Matches SpeciesDetailPanel. */}
+          <button
+            onClick={onClose}
+            aria-label="Close"
+            style={{
+              background: 'transparent', border: `1px solid ${t.line2}`,
+              borderRadius: 6, color: t.fg2, cursor: 'pointer',
+              padding: 6, display: 'flex', alignItems: 'center', flexShrink: 0,
+            }}
+          >
+            <XIcon size={14} />
+          </button>
         </div>
       </div>
 

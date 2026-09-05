@@ -137,3 +137,13 @@ export function PlusIcon(p: IconProps) {
 export function MinusIcon(p: IconProps) {
   return <Icon {...p}><path d="M5 12h14"/></Icon>;
 }
+
+export function HelpCircleIcon(p: IconProps) {
+  return <Icon {...p}><circle cx="12" cy="12" r="10"/><path d="M9.1 9a3 3 0 0 1 5.8 1c0 2-3 3-3 3"/><line x1="12" x2="12.01" y1="17" y2="17"/></Icon>;
+}
+
+/** Drive time. Deliberately not ClockIcon — ChasePanel already uses that for
+ *  "usually seen", and the two badges can appear in the same card. */
+export function CarIcon(p: IconProps) {
+  return <Icon {...p}><path d="M5 17H3v-5l2-5h14l2 5v5h-2"/><circle cx="7" cy="17" r="2"/><circle cx="17" cy="17" r="2"/><path d="M9 17h6"/></Icon>;
+}

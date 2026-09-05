@@ -13,8 +13,11 @@ import {
   PRIVATE_LOCATION_HINT,
   PRIVATE_LOCATION_LABEL,
 } from '@/lib/location-privacy';
+import { locKeyOf } from '@/lib/markers';
+import type { LatLng } from '@/lib/drive-time';
 import { LockIcon, NavigationIcon, XIcon } from '@/components/Icons';
 import ChasePanel from './ChasePanel';
+import DriveTimeBadge from './DriveTimeBadge';
 
 /**
  * Species detail — the persistent replacement for the old marker popup.
@@ -37,6 +40,9 @@ interface Props {
   lifeSet: Set<string>;
   /** Species focused from the sidebar — sorts to the front of the pager. */
   focusedCode: string | null;
+  /** The user's GPS fix, for the drive-time badge. `null` when geolocation was
+   *  denied — the badge is then omitted entirely rather than guessed at. */
+  driveOrigin: LatLng | null;
   lightMode: boolean;
   isMobile: boolean;
   /** Low battery / reduced motion — drops the slide-in, matching the map controls. */
@@ -49,6 +55,7 @@ export default function SpeciesDetailPanel({
   group,
   lifeSet,
   focusedCode,
+  driveOrigin,
   lightMode,
   isMobile,
   reduceMotion,
@@ -229,7 +236,7 @@ export default function SpeciesDetailPanel({
           </div>
         )}
 
-        <LocationRow obs={obs} theme={t} />
+        <LocationRow obs={obs} theme={t} driveOrigin={driveOrigin} lightMode={lightMode} />
 
         <AddToLifeList
           obs={obs}
@@ -276,8 +283,15 @@ function SpeciesPhoto({ sciName, comName, theme }: { sciName: string; comName: s
 // ─── Location + sighting meta ─────────────────────────────────────────────────
 // Kept as its own block with a name line, a badge row and a trailing action
 // slot. Phase C landed the location-privacy treatment and the Directions action
-// in the slot Phase B reserved for them, without restructuring the layout. The
-// drive-time badge is the remaining tenant.
+// in the slot Phase B reserved for them, without restructuring the layout.
+// Phase D landed the drive-time badge in the badge row — the last tenant this
+// block was designed to receive, and again with no restructuring.
+//
+// Privacy and drive time are independent here, deliberately. A private location
+// shows a drive-time badge AND no Directions button: a duration is a number with
+// no address and no route, while a directions link is navigation. See
+// PhaseC_rationale.md §7.4 — this pairing is the whole point of that distinction,
+// not an oversight.
 //
 // Privacy: a private location is *labelled*, and eBird's own `locName` is kept
 // beneath it in muted type. eBird publishes that name itself, so hiding it buys
@@ -285,7 +299,12 @@ function SpeciesPhoto({ sciName, comName, theme }: { sciName: string; comName: s
 // worth reading). What is withheld is the thing that actually enables a visit:
 // the directions action, and coordinate precision.
 
-function LocationRow({ obs, theme: t }: { obs: ClassifiedObservation; theme: Theme }) {
+function LocationRow({ obs, theme: t, driveOrigin, lightMode }: {
+  obs: ClassifiedObservation;
+  theme: Theme;
+  driveOrigin: LatLng | null;
+  lightMode: boolean;
+}) {
   const isPrivate = isPrivateLocation(obs);
   const directions = observationDirectionsUrl(obs);
 
@@ -320,6 +339,17 @@ function LocationRow({ obs, theme: t }: { obs: ClassifiedObservation; theme: The
         <span>{obs.howMany ? `${obs.howMany}×` : '1×'}</span>
         <span>{timeAgo(obs.obsDt)}</span>
         <span>{formatCoords(obs)}</span>
+        {/* Not lazy: this panel shows one location at a time, so there is nothing
+            to defer. Resolves from lib/drive-time.ts's cache when the list has
+            already asked for this location. */}
+        {driveOrigin && (
+          <DriveTimeBadge
+            origin={driveOrigin}
+            locKey={locKeyOf(obs)}
+            coords={[obs.lat, obs.lng]}
+            lightMode={lightMode}
+          />
+        )}
       </div>
 
       {obs.reportCount != null && obs.reportCount > 1 && (

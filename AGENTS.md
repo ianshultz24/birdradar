@@ -4,10 +4,19 @@
 This version has breaking changes — APIs, conventions, and file structure may all differ from your training data. Read the relevant guide in `node_modules/next/dist/docs/` before writing any code. Heed deprecation notices.
 <!-- END:nextjs-agent-rules -->
 
+# Before debugging a route handler: restart the dev server
+
+An `/api/*` 404 in `next dev` is a server-state symptom until proven otherwise. The
+discriminator is two probes: if the route is listed in `.next/dev/types/routes.d.ts`
+and `/api/some-nonexistent-path` returns an identical 404, the router is not seeing
+your handler and the handler is not the problem. Restart `next dev` before reading a
+line of route code. See `Agentic Rationale/PhaseE1_bugfix_ebird404.md`.
+
 # Bugfix reports
 
-Every bugfix gets a report in `fixes/`, written in the format of
-`fixes/ind_bugfix_A.md`. Follow that format unless explicitly told otherwise:
+Every bugfix gets a report in `Agentic Rationale/`, written in the format of
+`Agentic Rationale/ind_bugfix_A.md`. Follow that format unless explicitly told
+otherwise:
 
 1. **Symptom** — the report verbatim.
 2. **Root cause** — with `file:line` evidence, not a description of the fix.

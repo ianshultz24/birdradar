@@ -1,5 +1,7 @@
 // Option B "Observatory" — clean productivity/finance + nature
 
+import { driveTimeBand, type DriveTimeBand } from './drive-time';
+
 export interface Theme {
   bg0: string; bg1: string; bg2: string; bg3: string;
   fg0: string; fg1: string; fg2: string; fg3: string; fg4: string;
@@ -103,6 +105,50 @@ export function oddsColor(score: number, lightMode: boolean): { color: string; b
   }
   return {
     color: `rgb(${r}, ${g}, ${b})`,
+    bg: `rgba(${r}, ${g}, ${b}, 0.10)`,
+    border: `rgba(${r}, ${g}, ${b}, 0.22)`,
+  };
+}
+
+// ─── Drive-time presentation ──────────────────────────────────────────────────
+// A deliberately separate palette from both of the above. Two reasons, and both
+// are the kind of thing that gets "tidied" away:
+//
+//   1. Not oddsColor(). That is a continuous green→gold→gray ramp encoding
+//      *likelihood*. Drive time is a different quantity on a different scale;
+//      sharing a colour language would make the detail panel unreadable, since
+//      the two sit inches apart.
+//   2. Not tierTokens(). PhaseC_rationale.md §11 records that red there encodes
+//      "eBird notable" and is load-bearing. A red drive-time badge must read as a
+//      different kind of object: it lives in the meta row with a car glyph, never
+//      in the tier-badge position.
+//
+// Bands come from driveTimeBand() in lib/drive-time.ts, which owns the
+// thresholds. This function owns only the colours.
+
+const driveTimeLight: Record<DriveTimeBand, string> = {
+  green: '#15803D',
+  yellow: '#A16207',
+  orange: '#C2410C',
+  red: '#B91C1C',
+};
+
+const driveTimeDark: Record<DriveTimeBand, string> = {
+  green: '#4ADE80',
+  yellow: '#FACC15',
+  orange: '#FB923C',
+  red: '#F87171',
+};
+
+/** `{ color, bg, border }`, matching the shape of tierTokens() and oddsColor(). */
+export function driveTimeTokens(
+  seconds: number,
+  lightMode: boolean
+): { color: string; bg: string; border: string } {
+  const hex = (lightMode ? driveTimeLight : driveTimeDark)[driveTimeBand(seconds)];
+  const [r, g, b] = hexToRgb(hex);
+  return {
+    color: hex,
     bg: `rgba(${r}, ${g}, ${b}, 0.10)`,
     border: `rgba(${r}, ${g}, ${b}, 0.22)`,
   };

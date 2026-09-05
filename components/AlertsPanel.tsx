@@ -1,17 +1,87 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useSyncExternalStore } from 'react';
 import type { ClassifiedObservation, TargetSpecies } from '@/lib/ebird';
 import { timeAgo, fmtDist, parseObsDt } from '@/lib/ebird';
-import { getTheme, tierTokens, tierLabel, type Theme } from '@/lib/theme';
+import { getTheme, tierTokens, tierLabel, oddsColor, oddsLabel, type Theme } from '@/lib/theme';
 import { fetchChaseStats } from '@/lib/chase';
 import { haversineKm } from '@/lib/geo';
+import {
+  sortObservations,
+  sectionSortMode,
+  tierHasChaseOdds,
+  SORT_MODES,
+  SORT_LABELS,
+  type SortMode,
+} from '@/lib/alerts-sort';
 import type { ArrivingSpecies } from '@/lib/forecast';
 import { isPrivateLocation, PRIVATE_LOCATION_LABEL } from '@/lib/location-privacy';
+import { locKeyOf } from '@/lib/markers';
+import {
+  getDriveTimeConfigured,
+  subscribeDriveTimeConfigured,
+  type LatLng,
+} from '@/lib/drive-time';
 import ChasePanel from '@/components/ChasePanel';
-import { SearchIcon, XIcon, MapPinIcon, TargetIcon, LockIcon } from '@/components/Icons';
+import DriveTimeBadge from '@/components/DriveTimeBadge';
+import { SearchIcon, XIcon, MapPinIcon, TargetIcon, LockIcon, CarIcon } from '@/components/Icons';
 
-type SortMode = 'recent' | 'closest' | 'chase';
+/** Drive-time tolerances offered by the "reachable only" filter, in minutes.
+ *  30 is the default (DEFAULT_SETTINGS.driveTimeMaxMin); the rest bracket it. */
+const DRIVE_TIME_TOLERANCES = [15, 30, 45, 60, 90] as const;
+
+/**
+ * Unique species scored per pass of the chase-odds effect.
+ *
+ * Was 20 and lifers-only. Widening the sort to the `rare` section widened the
+ * set that needs a score, so this went to 30 — chosen against the *upstream*
+ * budget, not the UI: each entry is one `/api/ebird/species` call sharing the
+ * eBird proxy's per-minute allowance with the three-endpoint search fetch.
+ * Raising it further trades sortable rows for 503s on the map.
+ */
+const CHASE_SCORE_CAP = 30;
+
+/**
+ * Slots held back for the "Rare — Already Seen" section.
+ *
+ * A plain lifers-first priority order does **not** work, and this was measured
+ * rather than reasoned about: on a normal day the default search area returns
+ * 85+ unscored lifer species, which swallows all 30 slots, and the rare section
+ * gets zero scores — so it falls back to recency and is byte-identical to
+ * "Recent". That is the original bug wearing a different hat.
+ *
+ * Rarities are, definitionally, few. Eight is comfortably above what the section
+ * holds in practice (5 in the reproduction), so reserving them costs a quarter
+ * of the budget on paper and far less in practice — any unclaimed reserve is
+ * handed straight back to the lifers below.
+ */
+const RARE_SCORE_RESERVE = 8;
+
+/**
+ * Which species get scored, and in what order, when the cap bites.
+ *
+ * **The rare reserve goes first in the queue, not last.** Ordering the queue
+ * lifers-first is the intuitive choice and it was measured to be wrong: the
+ * workers score sequentially at four at a time, so with 26 lifers ahead of them
+ * the four rarities did not resolve for ~35 seconds, and for that whole window
+ * the Rare section sat in recency order — indistinguishable from the bug. The
+ * reserve is small by construction, so putting it in front delays the lifer
+ * section by a handful of requests and makes the guarantee immediate instead of
+ * eventual.
+ */
+function selectChaseReps(reps: ClassifiedObservation[]): ClassifiedObservation[] {
+  const lifers = reps.filter((o) => o.tier === 'lifer' || o.tier === 'lifer-rare');
+  const rares = reps.filter((o) => o.tier === 'rare');
+
+  const rareTake = rares.slice(0, RARE_SCORE_RESERVE);
+  const liferTake = lifers.slice(0, CHASE_SCORE_CAP - rareTake.length);
+  // Hand back whatever the lifers didn't use — a quiet day must not leave the
+  // reserve capped at 8 when there is budget going spare.
+  const spare = CHASE_SCORE_CAP - rareTake.length - liferTake.length;
+  const rareExtra = spare > 0 ? rares.slice(rareTake.length, rareTake.length + spare) : [];
+
+  return [...rareTake, ...rareExtra, ...liferTake];
+}
 
 function formatArrival(dateStr: string): string {
   const parts = dateStr.split('-');
@@ -32,75 +102,85 @@ interface Props {
   useMetric?: boolean;
   userCenter: [number, number];
   focusedSpecies: { code: string; name: string } | null;
+  /** The user's GPS fix. `null` when geolocation was denied — badges are omitted
+   *  and the filter is disabled, since there is nothing to measure from. */
+  driveOrigin: LatLng | null;
+  driveTimeReachableOnly: boolean;
+  driveTimeMaxMin: number;
+  /** Sort mode and search text are owned by Sidebar, not by this panel.
+   *  Sidebar renders `{activeTab === 'alerts' && <AlertsPanel/>}`, so a tab
+   *  switch unmounts this component — local state here silently reverted the
+   *  user's choice to "Recent", which is one half of the Phase E1 sort bug. */
+  sortBy: SortMode;
+  onSortByChange: (mode: SortMode) => void;
+  searchQuery: string;
+  onSearchQueryChange: (q: string) => void;
   onFlyTo: (lat: number, lng: number) => void;
   onFocusSpecies: (code: string, name: string) => void;
+  onDriveTimeFilterChange: (reachableOnly: boolean, maxMin: number) => void;
 }
 
 export default function AlertsPanel({
   observations, targetSpecies, arrivingSpecies, yearListActive, lightMode, useMetric = true,
-  userCenter, focusedSpecies, onFlyTo, onFocusSpecies,
+  userCenter, focusedSpecies, driveOrigin, driveTimeReachableOnly, driveTimeMaxMin,
+  sortBy, onSortByChange, searchQuery, onSearchQueryChange,
+  onFlyTo, onFocusSpecies, onDriveTimeFilterChange,
 }: Props) {
-  const [sortBy, setSortBy] = useState<SortMode>('recent');
-  const [searchQuery, setSearchQuery] = useState('');
   const [hoveredSort, setHoveredSort] = useState<SortMode | null>(null);
   const [chaseScores, setChaseScores] = useState<Map<string, number>>(new Map());
   const [chaseScoring, setChaseScoring] = useState(false);
   const t = getTheme(lightMode);
 
-  function byRecency(a: ClassifiedObservation, b: ClassifiedObservation): number {
-    return parseObsDt(b.obsDt).getTime() - parseObsDt(a.obsDt).getTime();
-  }
+  /** Whether the server can answer drive-time questions at all. `null` until the
+   *  first response — the server snapshot, so SSR renders the neutral state. */
+  const driveTimeConfigured = useSyncExternalStore(
+    subscribeDriveTimeConfigured,
+    getDriveTimeConfigured,
+    () => null,
+  );
 
-  function sortObs(arr: ClassifiedObservation[], allowChase = false): ClassifiedObservation[] {
-    if (sortBy === 'closest') {
-      // Precompute distances once instead of inside the comparator (O(n) vs O(n log n) haversines)
-      return arr
-        .map((obs) => ({ obs, d: haversineKm(userCenter[0], userCenter[1], obs.lat, obs.lng) }))
-        .sort((a, b) => a.d - b.d)
-        .map(({ obs }) => obs);
-    }
-    if (sortBy === 'chase' && allowChase) {
-      // Scored species first (highest odds), the rest in recency order below.
-      // Scores are fetched lazily for the lifer section only (see effect).
-      return [...arr].sort((a, b) => {
-        const sa = chaseScores.get(a.speciesCode);
-        const sb = chaseScores.get(b.speciesCode);
-        if (sa !== undefined && sb !== undefined) return sb - sa;
-        if (sa !== undefined) return -1;
-        if (sb !== undefined) return 1;
-        return byRecency(a, b);
-      });
-    }
-    return [...arr].sort(byRecency);
-  }
+  // One context, every list. Building it here rather than at each call site is
+  // what stops the sections from drifting apart again.
+  const sortCtx = { center: userCenter, scores: chaseScores };
 
-  const liferAll = sortObs(observations.filter(o => o.tier === 'lifer-rare' || o.tier === 'lifer'), true);
-  const rare = sortObs(observations.filter(o => o.tier === 'rare'));
-  const seen = sortObs(observations.filter(o => o.tier === 'seen'));
+  const liferAll = sortObservations(
+    observations.filter(o => o.tier === 'lifer-rare' || o.tier === 'lifer'),
+    sectionSortMode(sortBy, 'lifer'),
+    sortCtx,
+  );
+  const rare = sortObservations(
+    observations.filter(o => o.tier === 'rare'),
+    sectionSortMode(sortBy, 'rare'),
+    sortCtx,
+  );
+  const seen = sortObservations(
+    observations.filter(o => o.tier === 'seen'),
+    sectionSortMode(sortBy, 'seen'),
+    sortCtx,
+  );
 
-  // Stable signature of the lifer species set — drives the chase-scoring effect
-  const liferCodesSig = Array.from(
-    new Set(
-      observations
-        .filter(o => o.tier === 'lifer' || o.tier === 'lifer-rare')
-        .map(o => o.speciesCode)
-    )
+  // Stable signature of the species set that needs a score — drives the effect.
+  // Covers every tier that shows odds, which is every tier the chase sort now
+  // reorders; scoring a narrower set than the sort consumes is what made "Chase
+  // Odds" identical to "Recent" in two of the three sections.
+  const chaseCodesSig = Array.from(
+    new Set(observations.filter(o => tierHasChaseOdds(o.tier)).map(o => o.speciesCode))
   ).sort().join(',');
 
-  // Lazily score the lifer section when "Chase odds" sort is active. Bounded to
-  // the most-recent unique species and fetched with small concurrency so we
-  // never trip the per-IP rate limit.
+  // Lazily score the chaseable sections when "Chase odds" sort is active.
+  // Bounded to the most-recent unique species and fetched with small concurrency
+  // so we never trip the per-IP rate limit.
   useEffect(() => {
     if (sortBy !== 'chase') return;
     let cancelled = false;
 
     const repByCode = new Map<string, ClassifiedObservation>();
     for (const o of observations) {
-      if (o.tier !== 'lifer' && o.tier !== 'lifer-rare') continue;
+      if (!tierHasChaseOdds(o.tier)) continue;
       const cur = repByCode.get(o.speciesCode);
       if (!cur || parseObsDt(o.obsDt) > parseObsDt(cur.obsDt)) repByCode.set(o.speciesCode, o);
     }
-    const reps = Array.from(repByCode.values()).slice(0, 20); // bound request count
+    const reps = selectChaseReps(Array.from(repByCode.values()));
     if (reps.length === 0) return;
 
     setChaseScoring(true);
@@ -128,7 +208,32 @@ export default function AlertsPanel({
 
     return () => { cancelled = true; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [sortBy, liferCodesSig]);
+  }, [sortBy, chaseCodesSig]);
+
+  /** Whether this species' odds are known, still being fetched, or unavailable.
+   *  Chase mode must never render a score it does not have — an unscored card
+   *  that looks scored is exactly how "Chase Odds" passed for "Recent". */
+  function chaseState(code: string): { score: number } | 'pending' | 'unavailable' {
+    const score = chaseScores.get(code);
+    if (score !== undefined) return { score };
+    return chaseScoring ? 'pending' : 'unavailable';
+  }
+
+  /**
+   * The metric the active sort actually ordered by, handed to the card.
+   *
+   * Distance used to be the only one shown, and only in "Closest" — so in the
+   * other two modes nothing on screen said whether a sort had run at all. That
+   * is what made two broken sort modes survive four phases.
+   */
+  function sortMetricProps(obs: ClassifiedObservation, mode: SortMode) {
+    return {
+      distKm: mode === 'closest'
+        ? haversineKm(userCenter[0], userCenter[1], obs.lat, obs.lng)
+        : undefined,
+      chase: mode === 'chase' ? chaseState(obs.speciesCode) : undefined,
+    };
+  }
 
   function flyToTarget(speciesCode: string) {
     const matches = observations.filter(o => o.speciesCode === speciesCode);
@@ -142,13 +247,19 @@ export default function AlertsPanel({
   const liferSectionTitle = yearListActive ? 'Year Opportunities' : 'Lifer Opportunities';
 
   const searchActive = searchQuery.trim().length > 0;
+  // Search results obey the selected sort like every other list. They used to be
+  // hardcoded to recency *and* the sort control was hidden while searching, so a
+  // query silently pinned the whole panel to "Recent" with nothing on screen
+  // saying so — a third way the sort appeared not to work.
   const searchResults = searchActive
-    ? [...observations]
-        .filter(o => {
+    ? sortObservations(
+        observations.filter(o => {
           const q = searchQuery.trim().toLowerCase();
           return o.comName.toLowerCase().includes(q) || o.sciName.toLowerCase().includes(q);
-        })
-        .sort((a, b) => parseObsDt(b.obsDt).getTime() - parseObsDt(a.obsDt).getTime())
+        }),
+        sortBy,
+        sortCtx,
+      )
     : [];
 
   return (
@@ -162,12 +273,12 @@ export default function AlertsPanel({
         position: 'sticky', top: 0, zIndex: 2,
         background: t.bg1,
       }}>
-        <div style={{ position: 'relative', marginBottom: searchActive ? 0 : 10 }}>
+        <div style={{ position: 'relative', marginBottom: 10 }}>
           <SearchIcon size={14} style={{ position: 'absolute', left: 10, top: '50%', transform: 'translateY(-50%)', color: t.fg3 }}/>
           <input
             type="text"
             value={searchQuery}
-            onChange={e => setSearchQuery(e.target.value)}
+            onChange={e => onSearchQueryChange(e.target.value)}
             placeholder="Search species nearby…"
             style={{
               width: '100%', padding: '9px 32px 9px 32px',
@@ -179,7 +290,7 @@ export default function AlertsPanel({
             }}
           />
           {searchActive && (
-            <button onClick={() => setSearchQuery('')} style={{
+            <button onClick={() => onSearchQueryChange('')} style={{
               position: 'absolute', right: 9, top: '50%', transform: 'translateY(-50%)',
               background: 'transparent', border: 'none', cursor: 'pointer',
               color: t.fg3, padding: '0 2px',
@@ -189,37 +300,76 @@ export default function AlertsPanel({
           )}
         </div>
 
-        {!searchActive && (
-          <div style={{
-            display: 'flex', border: `1px solid ${t.line2}`,
-            borderRadius: 8, overflow: 'hidden',
-          }}>
-            {(['recent', 'closest', 'chase'] as const).map(s => (
+        {/* Deliberately NOT hidden while searching. Hiding it left the results
+            recency-ordered with no control visible to explain why. */}
+        <div style={{
+          display: 'flex', border: `1px solid ${t.line2}`,
+          borderRadius: 8, overflow: 'hidden',
+        }}>
+          {/* The active pill is a soft `accentBg` tint — NOT a solid fill, which
+              is what this briefly was.
+
+              The tint alone cannot carry the signal, and that is the whole
+              reason for the underline. In light mode `accentBg` is
+              rgba(27,67,50,0.05) over white (~#F2F4F3), sitting next to a hover
+              state of `bg2` (#F1F3F5): a difference of about one value step.
+              "Did my click register?" was not answerable from the screen, and
+              that ambiguity is why a working sort read as a broken one for a
+              whole phase.
+
+              The underline is a *shape* cue rather than another colour, so it
+              survives the two backgrounds being near-identical. Every pill
+              carries `2px solid transparent`, so making one accent-coloured
+              changes no heights and shifts nothing in the row. */}
+          {SORT_MODES.map(s => {
+            const active = sortBy === s;
+            return (
               <button
                 key={s}
-                onClick={() => setSortBy(s)}
+                onClick={() => onSortByChange(s)}
                 onMouseEnter={() => setHoveredSort(s)}
                 onMouseLeave={() => setHoveredSort(null)}
-                title={s === 'chase' ? 'Rank lifers by how likely the bird is still there' : undefined}
+                aria-pressed={active}
+                title={s === 'chase' ? 'Rank by how likely the bird is still there' : undefined}
                 style={{
                   flex: 1, padding: '7px 0',
-                  background: sortBy === s ? t.accentBg : hoveredSort === s ? t.bg2 : 'transparent',
+                  background: active ? t.accentBg : hoveredSort === s ? t.bg2 : 'transparent',
                   border: 'none',
-                  color: sortBy === s ? t.accent : t.fg2,
-                  fontSize: 11.5, fontWeight: sortBy === s ? 600 : 400,
+                  borderBottom: `2px solid ${active ? t.accent : 'transparent'}`,
+                  color: active ? t.accent : t.fg2,
+                  fontSize: 11.5, fontWeight: active ? 600 : 400,
                   cursor: 'pointer', fontFamily: t.sans,
                   transition: 'all 0.12s',
                 }}>
-                {s === 'recent' ? 'Recent' : s === 'closest' ? 'Closest' : 'Chase Odds'}
+                {SORT_LABELS[s]}
               </button>
-            ))}
-          </div>
-        )}
+            );
+          })}
+        </div>
 
-        {!searchActive && sortBy === 'chase' && (
-          <div style={{ marginTop: 6, fontSize: 10.5, color: t.fg3, fontFamily: t.mono, textAlign: 'center' }}>
-            {chaseScoring ? 'Scoring lifers by chase odds…' : 'Lifers ranked by chase odds'}
-          </div>
+        {/* States the active ordering in words.
+            This used to read "Orders the sightings below, not Target or
+            Arriving" — a sentence that existed solely to explain why the top of
+            the panel did not move when the sort changed. The sorted sections now
+            sit directly beneath this control, so that explanation is not just
+            unnecessary, it is false. A stale explanation is worse than none. */}
+        <div style={{ marginTop: 6, fontSize: 10.5, color: t.fg3, fontFamily: t.mono, textAlign: 'center', lineHeight: 1.4 }}>
+          {sortBy === 'chase'
+            ? (chaseScoring ? 'Scoring by chase odds…' : 'Ranked by chase odds')
+            : sortBy === 'closest'
+              ? 'Nearest sightings first'
+              : 'Newest sightings first'}
+        </div>
+
+        {!searchActive && (
+          <DriveTimeFilter
+            t={t}
+            enabled={driveOrigin !== null}
+            configured={driveTimeConfigured}
+            reachableOnly={driveTimeReachableOnly}
+            maxMin={driveTimeMaxMin}
+            onChange={onDriveTimeFilterChange}
+          />
         )}
       </div>
 
@@ -250,20 +400,97 @@ export default function AlertsPanel({
           {searchResults.length === 0 ? (
             <EmptyState text={`No species matching "${searchQuery.trim()}"`} t={t}/>
           ) : (
+            // No `distKm` override below. One used to sit AFTER the
+            // `sortMetricProps` spread and win, so search results showed a
+            // distance in all three modes — contradicting the rule that each
+            // mode renders its own sort key, and making the control look inert
+            // while a search was active.
             searchResults.map(obs => (
               <ObsCard
                 key={`s-${obs.speciesCode}-${obs.locId ?? obs.locName}`}
                 obs={obs} t={t} lightMode={lightMode} yearListActive={yearListActive}
                 focusedCode={focusedSpecies?.code ?? null}
                 onFlyTo={onFlyTo} onFocusSpecies={onFocusSpecies}
-                distKm={haversineKm(userCenter[0], userCenter[1], obs.lat, obs.lng)}
+                {...sortMetricProps(obs, sortBy)}
                 useMetric={useMetric}
+                driveOrigin={driveOrigin}
               />
             ))
           )}
         </div>
       ) : (
         <>
+          {/* ── The sorted sections come FIRST, directly under the sort control ──
+              This ordering is the fix for "changing categories does nothing", and
+              it replaces a scroll effect that used to jump the panel down past
+              the two sections below.
+
+              Target Species and Arriving Soon genuinely cannot be ordered by this
+              control — a TargetSpecies has a `nearbyCount` and an ArrivingSpecies
+              has an arrival date, so there is no recency, distance or chase score
+              on either (lib/ebird.ts, lib/forecast.ts). While they led the panel
+              they were 22 cards and ~1681 px of sort-invariant content standing
+              between the control and the first card it touches, so clicking
+              Recent / Closest / Chase Odds changed nothing a user could see.
+
+              **Anything added above this point re-creates that bug.** New
+              sections belong below the sorted three, or below Arriving Soon. */}
+          <SectionHeader title={liferSectionTitle} count={liferAll.length} t={t} dotColor={t.lifer}/>
+          {liferAll.length === 0
+            ? <EmptyState text={yearListActive ? 'No new species this year nearby' : 'No lifers nearby'} t={t}/>
+            : liferAll.map(obs => (
+              <ObsCard key={`${obs.speciesCode}|${obs.locId ?? obs.locName}`}
+                obs={obs} t={t} lightMode={lightMode} yearListActive={yearListActive}
+                focusedCode={focusedSpecies?.code ?? null}
+                onFlyTo={onFlyTo} onFocusSpecies={onFocusSpecies}
+                {...sortMetricProps(obs, sectionSortMode(sortBy, 'lifer'))}
+                useMetric={useMetric}
+                driveOrigin={driveOrigin}
+              />
+            ))}
+
+          <SectionHeader title="Rare — Already Seen" count={rare.length} t={t} dotColor={t.rare}/>
+          {rare.length === 0
+            ? <EmptyState text="No rare species nearby" t={t}/>
+            : rare.map(obs => (
+              <ObsCard key={`${obs.speciesCode}|${obs.locId ?? obs.locName}`}
+                obs={obs} t={t} lightMode={lightMode} yearListActive={yearListActive}
+                focusedCode={focusedSpecies?.code ?? null}
+                onFlyTo={onFlyTo} onFocusSpecies={onFocusSpecies}
+                {...sortMetricProps(obs, sectionSortMode(sortBy, 'rare'))}
+                useMetric={useMetric}
+                driveOrigin={driveOrigin}
+              />
+            ))}
+
+          <SectionHeader
+            title="Seen Nearby"
+            count={seen.length}
+            t={t}
+            dotColor={t.seen}
+            // Says why this one section ignores the chase sort, rather than
+            // letting it look like the sort simply failed here.
+            note={sortBy === 'chase' ? 'by recency — no chase odds for seen birds' : undefined}
+          />
+          {seen.length === 0
+            ? <EmptyState text="No previously seen species nearby" t={t}/>
+            : seen.map(obs => (
+              <ObsCard key={`${obs.speciesCode}|${obs.locId ?? obs.locName}`}
+                obs={obs} t={t} lightMode={lightMode} yearListActive={yearListActive}
+                focusedCode={focusedSpecies?.code ?? null}
+                onFlyTo={onFlyTo} onFocusSpecies={onFocusSpecies}
+                {...sortMetricProps(obs, sectionSortMode(sortBy, 'seen'))}
+                useMetric={useMetric}
+                driveOrigin={driveOrigin}
+              />
+            ))}
+
+          {/* ── Below the sort's reach ──────────────────────────────────────
+              Neither of these is ordered by the control above, and neither can
+              be. They are here rather than at the top for exactly that reason —
+              see the note on the lifer header. They are still the answer to
+              "what should I go looking for", so they are kept in full, not
+              demoted to a link or a collapsed accordion. */}
           {targetSpecies.length > 0 && (
             <>
               <SectionHeader title="Target Species" count={targetSpecies.length} t={t} dotColor={t.target}/>
@@ -296,46 +523,131 @@ export default function AlertsPanel({
               ))}
             </>
           )}
-
-          <SectionHeader title={liferSectionTitle} count={liferAll.length} t={t} dotColor={t.lifer}/>
-          {liferAll.length === 0
-            ? <EmptyState text={yearListActive ? 'No new species this year nearby' : 'No lifers nearby'} t={t}/>
-            : liferAll.map(obs => (
-              <ObsCard key={`${obs.speciesCode}|${obs.locId ?? obs.locName}`}
-                obs={obs} t={t} lightMode={lightMode} yearListActive={yearListActive}
-                focusedCode={focusedSpecies?.code ?? null}
-                onFlyTo={onFlyTo} onFocusSpecies={onFocusSpecies}
-                distKm={sortBy === 'closest' ? haversineKm(userCenter[0], userCenter[1], obs.lat, obs.lng) : undefined}
-                useMetric={useMetric}
-              />
-            ))}
-
-          <SectionHeader title="Rare — Already Seen" count={rare.length} t={t} dotColor={t.rare}/>
-          {rare.length === 0
-            ? <EmptyState text="No rare species nearby" t={t}/>
-            : rare.map(obs => (
-              <ObsCard key={`${obs.speciesCode}|${obs.locId ?? obs.locName}`}
-                obs={obs} t={t} lightMode={lightMode} yearListActive={yearListActive}
-                focusedCode={focusedSpecies?.code ?? null}
-                onFlyTo={onFlyTo} onFocusSpecies={onFocusSpecies}
-                distKm={sortBy === 'closest' ? haversineKm(userCenter[0], userCenter[1], obs.lat, obs.lng) : undefined}
-                useMetric={useMetric}
-              />
-            ))}
-
-          <SectionHeader title="Seen Nearby" count={seen.length} t={t} dotColor={t.seen}/>
-          {seen.length === 0
-            ? <EmptyState text="No previously seen species nearby" t={t}/>
-            : seen.map(obs => (
-              <ObsCard key={`${obs.speciesCode}|${obs.locId ?? obs.locName}`}
-                obs={obs} t={t} lightMode={lightMode} yearListActive={yearListActive}
-                focusedCode={focusedSpecies?.code ?? null}
-                onFlyTo={onFlyTo} onFocusSpecies={onFocusSpecies}
-                distKm={sortBy === 'closest' ? haversineKm(userCenter[0], userCenter[1], obs.lat, obs.lng) : undefined}
-                useMetric={useMetric}
-              />
-            ))}
         </>
+      )}
+    </div>
+  );
+}
+
+// ─── Drive-time filter ───────────────────────────────────────────────────────
+// Two controls, one concern: a switch that turns the filter on, and the tolerance
+// it filters at. The tolerance stays visible while off so the switch's label can
+// say what it will do before it does it.
+//
+// This is NOT the "Chase Odds" sort a few pixels above it. That ranks by whether
+// the bird is still there (lib/chase.ts); this hides birds that are too far to
+// drive to. Keeping the two visually distinct is why this sits in its own row
+// with its own glyph rather than becoming a fourth sort button.
+
+function DriveTimeFilter({ t, enabled: hasOrigin, configured, reachableOnly, maxMin, onChange }: {
+  t: Theme;
+  /** There is a GPS fix to measure from. */
+  enabled: boolean;
+  /** The server has a routing key. `null` until the first answer — treated as
+   *  usable, because assuming a misconfiguration before asking would disable a
+   *  working control on every cold load. */
+  configured: boolean | null;
+  reachableOnly: boolean;
+  maxMin: number;
+  onChange: (reachableOnly: boolean, maxMin: number) => void;
+}) {
+  // Two distinct reasons this control cannot work, and they need distinct copy:
+  // no origin is the user's to fix from the browser, no routing key is the
+  // operator's to fix in the environment. Collapsing them into one disabled
+  // state sends the user hunting for a permission prompt that will never help.
+  const unconfigured = configured === false;
+  const enabled = hasOrigin && !unconfigured;
+  const on = enabled && reachableOnly;
+
+  return (
+    <div style={{ marginTop: 8 }}>
+      <button
+        onClick={() => onChange(!reachableOnly, maxMin)}
+        disabled={!enabled}
+        aria-pressed={on}
+        title={
+          unconfigured
+            ? 'Routing is not configured on the server'
+            : hasOrigin ? undefined : 'Needs your location'
+        }
+        style={{
+          width: '100%', display: 'flex', alignItems: 'center', gap: 7,
+          padding: '7px 9px', borderRadius: 8,
+          background: on ? t.accentBg : 'transparent',
+          border: `1px solid ${on ? t.accentBorder : t.line2}`,
+          color: !enabled ? t.fg4 : on ? t.accent : t.fg2,
+          fontSize: 11.5, fontWeight: on ? 600 : 400,
+          fontFamily: t.sans, cursor: enabled ? 'pointer' : 'default',
+          transition: 'all 0.12s',
+        }}
+      >
+        <CarIcon size={13} />
+        <span style={{ flex: 1, textAlign: 'left' }}>
+          Reachable only — within {maxMin} min
+        </span>
+        <span
+          aria-hidden
+          style={{
+            width: 26, height: 15, borderRadius: 8, flexShrink: 0,
+            background: on ? t.accent : t.line3,
+            position: 'relative', transition: 'background 0.15s',
+          }}
+        >
+          <span style={{
+            position: 'absolute', top: 2, left: on ? 13 : 2,
+            width: 11, height: 11, borderRadius: '50%',
+            background: t.bg1, transition: 'left 0.15s',
+          }}/>
+        </span>
+      </button>
+
+      {/* A silently missing control reads as a bug; say it was a decision.
+          Same reasoning as PRIVATE_LOCATION_HINT in lib/location-privacy.ts.
+          The unconfigured case says who can fix it — the previous behaviour was
+          an enabled switch that filtered nothing, which is strictly worse than
+          an honest disabled one. */}
+      {!enabled && (
+        <div style={{
+          marginTop: 5, fontSize: 10, color: t.fg3, fontFamily: t.mono,
+          lineHeight: 1.4, textAlign: 'center',
+        }}>
+          {unconfigured
+            ? 'Drive times unavailable — routing key not configured'
+            : 'Drive times need your location'}
+        </div>
+      )}
+
+      {on && (
+        <div style={{ display: 'flex', gap: 4, marginTop: 6 }}>
+          {DRIVE_TIME_TOLERANCES.map((m) => {
+            const active = m === maxMin;
+            return (
+              <button
+                key={m}
+                onClick={() => onChange(reachableOnly, m)}
+                style={{
+                  flex: 1, padding: '5px 0', borderRadius: 6,
+                  background: active ? t.accentBg : 'transparent',
+                  border: `1px solid ${active ? t.accentBorder : t.line2}`,
+                  color: active ? t.accent : t.fg3,
+                  fontSize: 10.5, fontWeight: active ? 700 : 400,
+                  fontFamily: t.mono, cursor: 'pointer', transition: 'all 0.12s',
+                }}
+              >
+                {m}m
+              </button>
+            );
+          })}
+        </div>
+      )}
+
+      {on && (
+        <div style={{
+          marginTop: 5, fontSize: 10, color: t.fg3, fontFamily: t.mono,
+          lineHeight: 1.4, textAlign: 'center',
+        }}>
+          Sightings with no known drive time stay visible
+        </div>
       )}
     </div>
   );
@@ -343,23 +655,81 @@ export default function AlertsPanel({
 
 // ─── Section header ──────────────────────────────────────────────────────────
 
-function SectionHeader({ title, count, t, dotColor }: { title: string; count: number; t: Theme; dotColor?: string }) {
+function SectionHeader({ title, count, t, dotColor, note }: {
+  title: string;
+  count: number;
+  t: Theme;
+  dotColor?: string;
+  /** Second line explaining a section that does not follow the active sort. */
+  note?: string;
+}) {
   return (
     <div style={{
-      display: 'flex', alignItems: 'center', padding: '10px 16px',
+      padding: '10px 16px',
       background: t.bg2, borderBottom: `1px solid ${t.line1}`,
       borderTop: `1px solid ${t.line1}`,
     }}>
-      {dotColor && (
-        <span style={{ width: 7, height: 7, borderRadius: '50%', background: dotColor, marginRight: 9, flexShrink: 0, opacity: 0.85 }}/>
-      )}
-      <span style={{ fontSize: 11, fontWeight: 600, color: t.fg1, letterSpacing: '0.03em', flex: 1, fontFamily: t.sans }}>
-        {title}
-      </span>
-      {count >= 0 && (
-        <span style={{ fontSize: 11, fontFamily: t.mono, color: dotColor ?? t.fg3, fontWeight: 600 }}>{count}</span>
+      <div style={{ display: 'flex', alignItems: 'center' }}>
+        {dotColor && (
+          <span style={{ width: 7, height: 7, borderRadius: '50%', background: dotColor, marginRight: 9, flexShrink: 0, opacity: 0.85 }}/>
+        )}
+        <span style={{ fontSize: 11, fontWeight: 600, color: t.fg1, letterSpacing: '0.03em', flex: 1, fontFamily: t.sans }}>
+          {title}
+        </span>
+        {count >= 0 && (
+          <span style={{ fontSize: 11, fontFamily: t.mono, color: dotColor ?? t.fg3, fontWeight: 600 }}>{count}</span>
+        )}
+      </div>
+      {note && (
+        <div style={{
+          fontSize: 10, color: t.fg3, fontFamily: t.mono, marginTop: 3,
+          marginLeft: dotColor ? 16 : 0, lineHeight: 1.35,
+        }}>
+          {note}
+        </div>
       )}
     </div>
+  );
+}
+
+// ─── Chase-odds chip ─────────────────────────────────────────────────────────
+// The sort key, rendered where the sort's other keys live (distance, timeAgo).
+//
+// It has three states and only one of them shows a number. An unscored species
+// must never borrow the look of a scored one: "Chase Odds looks the same as
+// Recent" was the reported bug, and before scores land that is exactly what a
+// chase-sorted list *is* — the chip is what makes that a visibly pending state
+// rather than an indistinguishable one.
+//
+// Colours come from `oddsColor()`, never `tierTokens()` — PhaseC_rationale.md
+// §11 records that tier red encodes "eBird notable" and is load-bearing.
+
+type ChaseState = { score: number } | 'pending' | 'unavailable';
+
+function ChaseOddsChip({ state, t, lightMode }: { state: ChaseState; t: Theme; lightMode: boolean }) {
+  if (state === 'pending' || state === 'unavailable') {
+    return (
+      <span style={{
+        fontFamily: t.mono, fontSize: 10, color: t.fg4,
+        fontStyle: 'italic', whiteSpace: 'nowrap',
+      }}>
+        {state === 'pending' ? 'scoring…' : 'odds unknown'}
+      </span>
+    );
+  }
+  const odds = oddsColor(state.score, lightMode);
+  return (
+    <span
+      title={oddsLabel(state.score)}
+      style={{
+        fontFamily: t.mono, fontSize: 10, fontWeight: 700,
+        color: odds.color, background: odds.bg,
+        border: `1px solid ${odds.border}`,
+        borderRadius: 4, padding: '1px 5px', whiteSpace: 'nowrap',
+      }}
+    >
+      {state.score}% odds
+    </span>
   );
 }
 
@@ -373,7 +743,7 @@ function EmptyState({ text, t }: { text: string; t: Theme }) {
 
 // ─── Observation card ────────────────────────────────────────────────────────
 
-function ObsCard({ obs, t, lightMode, yearListActive, focusedCode, onFlyTo, onFocusSpecies, distKm, useMetric }: {
+function ObsCard({ obs, t, lightMode, yearListActive, focusedCode, onFlyTo, onFocusSpecies, distKm, chase, useMetric, driveOrigin }: {
   obs: ClassifiedObservation;
   t: Theme;
   lightMode: boolean;
@@ -382,7 +752,10 @@ function ObsCard({ obs, t, lightMode, yearListActive, focusedCode, onFlyTo, onFo
   onFlyTo: (lat: number, lng: number) => void;
   onFocusSpecies: (code: string, name: string) => void;
   distKm?: number;
+  /** Present only while the chase sort is what ordered this card. */
+  chase?: ChaseState;
   useMetric?: boolean;
+  driveOrigin: LatLng | null;
 }) {
   const [hov, setHov] = useState(false);
   const tc = tierTokens(obs.tier, t);
@@ -459,8 +832,26 @@ function ObsCard({ obs, t, lightMode, yearListActive, focusedCode, onFlyTo, onFo
                   <span style={{ fontFamily: t.mono, fontSize: 10.5, color: t.fg3 }}>{fmtDist(distKm, useMetric)}</span>
                 </>
               )}
+              {chase !== undefined && (
+                <>
+                  <span style={{ color: t.fg4, margin: '0 2px' }}>·</span>
+                  <ChaseOddsChip state={chase} t={t} lightMode={lightMode} />
+                </>
+              )}
               <span style={{ color: t.fg4, margin: '0 2px' }}>·</span>
               <span style={{ fontFamily: t.mono, fontSize: 10.5, color: t.fg3 }}>{timeAgo(obs.obsDt)}</span>
+              {/* Lazy: dozens of these mount at once in this list. The observer
+                  lives inside the badge, and lib/drive-time.ts coalesces a whole
+                  scroll burst into one request. */}
+              {driveOrigin && (
+                <DriveTimeBadge
+                  origin={driveOrigin}
+                  locKey={locKeyOf(obs)}
+                  coords={[obs.lat, obs.lng]}
+                  lightMode={lightMode}
+                  lazy
+                />
+              )}
             </div>
           </div>
         </div>
