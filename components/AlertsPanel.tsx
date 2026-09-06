@@ -3,7 +3,7 @@
 import { useEffect, useState, useSyncExternalStore } from 'react';
 import type { ClassifiedObservation, TargetSpecies } from '@/lib/ebird';
 import { timeAgo, fmtDist, parseObsDt } from '@/lib/ebird';
-import { getTheme, tierTokens, tierLabel, oddsColor, oddsLabel, type Theme } from '@/lib/theme';
+import { getTheme, tierTokens, tierLabel, oddsColor, oddsLabel, text, type Theme } from '@/lib/theme';
 import { fetchChaseStats } from '@/lib/chase';
 import { haversineKm } from '@/lib/geo';
 import {
@@ -281,8 +281,8 @@ export default function AlertsPanel({
             onChange={e => onSearchQueryChange(e.target.value)}
             placeholder="Search species nearby…"
             style={{
+              ...text.body(t),
               width: '100%', padding: '9px 32px 9px 32px',
-              fontSize: 13, fontFamily: t.sans,
               background: t.bg2,
               border: `1px solid ${searchActive ? t.accentBorder : t.line2}`,
               borderRadius: 8, outline: 'none', color: t.fg0,
@@ -320,7 +320,13 @@ export default function AlertsPanel({
               The underline is a *shape* cue rather than another colour, so it
               survives the two backgrounds being near-identical. Every pill
               carries `2px solid transparent`, so making one accent-coloured
-              changes no heights and shifts nothing in the row. */}
+              changes no heights and shifts nothing in the row.
+
+              These pills deliberately do NOT take `text.control()`. The role
+              would supply a fixed `fontWeight`, and here the weight is half the
+              active-state signal — `active ? 600 : 400`. Same for the
+              drive-time toggles below. A role must never overwrite a value that
+              encodes state. */}
           {SORT_MODES.map(s => {
             const active = sortBy === s;
             return (
@@ -353,7 +359,7 @@ export default function AlertsPanel({
             the panel did not move when the sort changed. The sorted sections now
             sit directly beneath this control, so that explanation is not just
             unnecessary, it is false. A stale explanation is worse than none. */}
-        <div style={{ marginTop: 6, fontSize: 10.5, color: t.fg3, fontFamily: t.mono, textAlign: 'center', lineHeight: 1.4 }}>
+        <div style={{ ...text.caption(t), marginTop: 6, textAlign: 'center' }}>
           {sortBy === 'chase'
             ? (chaseScoring ? 'Scoring by chase odds…' : 'Ranked by chase odds')
             : sortBy === 'closest'
@@ -380,9 +386,12 @@ export default function AlertsPanel({
           background: t.accentBg, borderBottom: `1px solid ${t.accentBorder}`, flexShrink: 0,
         }}>
           <TargetIcon size={13} style={{ color: t.accent, flexShrink: 0 }}/>
+          {/* A species name, so it takes the species-name role like every other
+              one in the app. This was the panel's single internal inconsistency:
+              it rendered in mono while the card below it rendered in display. */}
           <span style={{
-            flex: 1, fontSize: 12, fontWeight: 600, color: t.accent,
-            fontFamily: t.mono, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+            ...text.rowTitle(t), flex: 1, fontSize: 12, color: t.accent,
+            overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
           }}>{focusedSpecies.name}</span>
           <button onClick={() => onFocusSpecies(focusedSpecies.code, focusedSpecies.name)} style={{
             background: 'transparent', border: 'none', cursor: 'pointer',
@@ -398,7 +407,7 @@ export default function AlertsPanel({
         <div>
           <SectionHeader title={`${searchResults.length} result${searchResults.length !== 1 ? 's' : ''}`} count={-1} t={t}/>
           {searchResults.length === 0 ? (
-            <EmptyState text={`No species matching "${searchQuery.trim()}"`} t={t}/>
+            <EmptyState label={`No species matching "${searchQuery.trim()}"`} t={t}/>
           ) : (
             // No `distKm` override below. One used to sit AFTER the
             // `sortMetricProps` spread and win, so search results showed a
@@ -437,7 +446,7 @@ export default function AlertsPanel({
               sections belong below the sorted three, or below Arriving Soon. */}
           <SectionHeader title={liferSectionTitle} count={liferAll.length} t={t} dotColor={t.lifer}/>
           {liferAll.length === 0
-            ? <EmptyState text={yearListActive ? 'No new species this year nearby' : 'No lifers nearby'} t={t}/>
+            ? <EmptyState label={yearListActive ? 'No new species this year nearby' : 'No lifers nearby'} t={t}/>
             : liferAll.map(obs => (
               <ObsCard key={`${obs.speciesCode}|${obs.locId ?? obs.locName}`}
                 obs={obs} t={t} lightMode={lightMode} yearListActive={yearListActive}
@@ -451,7 +460,7 @@ export default function AlertsPanel({
 
           <SectionHeader title="Rare — Already Seen" count={rare.length} t={t} dotColor={t.rare}/>
           {rare.length === 0
-            ? <EmptyState text="No rare species nearby" t={t}/>
+            ? <EmptyState label="No rare species nearby" t={t}/>
             : rare.map(obs => (
               <ObsCard key={`${obs.speciesCode}|${obs.locId ?? obs.locName}`}
                 obs={obs} t={t} lightMode={lightMode} yearListActive={yearListActive}
@@ -473,7 +482,7 @@ export default function AlertsPanel({
             note={sortBy === 'chase' ? 'by recency — no chase odds for seen birds' : undefined}
           />
           {seen.length === 0
-            ? <EmptyState text="No previously seen species nearby" t={t}/>
+            ? <EmptyState label="No previously seen species nearby" t={t}/>
             : seen.map(obs => (
               <ObsCard key={`${obs.speciesCode}|${obs.locId ?? obs.locName}`}
                 obs={obs} t={t} lightMode={lightMode} yearListActive={yearListActive}
@@ -508,7 +517,7 @@ export default function AlertsPanel({
           {arrivingSpecies.length > 0 && (
             <>
               <SectionHeader title="Arriving Soon" count={arrivingSpecies.length} t={t} dotColor={t.target}/>
-              <div style={{ padding: '8px 16px 4px', fontSize: 10.5, color: t.fg3, fontFamily: t.mono, lineHeight: 1.5 }}>
+              <div style={{ ...text.caption(t), padding: '8px 16px 4px', lineHeight: 1.5 }}>
                 Expected in your region within weeks — not being seen locally yet.{' '}
                 <a
                   href="https://birdcast.info/migration-tools/live-bird-migration-maps/"
@@ -608,8 +617,7 @@ function DriveTimeFilter({ t, enabled: hasOrigin, configured, reachableOnly, max
           an honest disabled one. */}
       {!enabled && (
         <div style={{
-          marginTop: 5, fontSize: 10, color: t.fg3, fontFamily: t.mono,
-          lineHeight: 1.4, textAlign: 'center',
+          ...text.caption(t), marginTop: 5, fontSize: 10, textAlign: 'center',
         }}>
           {unconfigured
             ? 'Drive times unavailable — routing key not configured'
@@ -643,8 +651,7 @@ function DriveTimeFilter({ t, enabled: hasOrigin, configured, reachableOnly, max
 
       {on && (
         <div style={{
-          marginTop: 5, fontSize: 10, color: t.fg3, fontFamily: t.mono,
-          lineHeight: 1.4, textAlign: 'center',
+          ...text.caption(t), marginTop: 5, fontSize: 10, textAlign: 'center',
         }}>
           Sightings with no known drive time stay visible
         </div>
@@ -673,16 +680,16 @@ function SectionHeader({ title, count, t, dotColor, note }: {
         {dotColor && (
           <span style={{ width: 7, height: 7, borderRadius: '50%', background: dotColor, marginRight: 9, flexShrink: 0, opacity: 0.85 }}/>
         )}
-        <span style={{ fontSize: 11, fontWeight: 600, color: t.fg1, letterSpacing: '0.03em', flex: 1, fontFamily: t.sans }}>
+        <span style={{ ...text.sectionLabel(t), flex: 1 }}>
           {title}
         </span>
         {count >= 0 && (
-          <span style={{ fontSize: 11, fontFamily: t.mono, color: dotColor ?? t.fg3, fontWeight: 600 }}>{count}</span>
+          <span style={{ ...text.sectionCount(t), color: dotColor ?? t.fg3 }}>{count}</span>
         )}
       </div>
       {note && (
         <div style={{
-          fontSize: 10, color: t.fg3, fontFamily: t.mono, marginTop: 3,
+          ...text.caption(t), fontSize: 10, marginTop: 3,
           marginLeft: dotColor ? 16 : 0, lineHeight: 1.35,
         }}>
           {note}
@@ -710,7 +717,7 @@ function ChaseOddsChip({ state, t, lightMode }: { state: ChaseState; t: Theme; l
   if (state === 'pending' || state === 'unavailable') {
     return (
       <span style={{
-        fontFamily: t.mono, fontSize: 10, color: t.fg4,
+        ...text.metaChip(t), fontSize: 10, color: t.fg4,
         fontStyle: 'italic', whiteSpace: 'nowrap',
       }}>
         {state === 'pending' ? 'scoring…' : 'odds unknown'}
@@ -722,10 +729,10 @@ function ChaseOddsChip({ state, t, lightMode }: { state: ChaseState; t: Theme; l
     <span
       title={oddsLabel(state.score)}
       style={{
-        fontFamily: t.mono, fontSize: 10, fontWeight: 700,
+        ...text.actionPill(t),
         color: odds.color, background: odds.bg,
         border: `1px solid ${odds.border}`,
-        borderRadius: 4, padding: '1px 5px', whiteSpace: 'nowrap',
+        whiteSpace: 'nowrap',
       }}
     >
       {state.score}% odds
@@ -733,10 +740,11 @@ function ChaseOddsChip({ state, t, lightMode }: { state: ChaseState; t: Theme; l
   );
 }
 
-function EmptyState({ text, t }: { text: string; t: Theme }) {
+// `label`, not `text` — the module now imports `text` from lib/theme.
+function EmptyState({ label, t }: { label: string; t: Theme }) {
   return (
-    <div style={{ padding: '14px 16px', fontSize: 12, color: t.fg3, fontStyle: 'italic', fontFamily: t.sans }}>
-      {text}
+    <div style={{ ...text.emptyState(t), padding: '14px 16px' }}>
+      {label}
     </div>
   );
 }
@@ -795,25 +803,24 @@ function ObsCard({ obs, t, lightMode, yearListActive, focusedCode, onFlyTo, onFo
             {/* Name + badge row */}
             <div style={{ display: 'flex', alignItems: 'center', gap: 7, marginBottom: 2 }}>
               <span style={{
-                fontSize: 13, fontWeight: 600, color: t.fg0,
+                ...text.rowTitle(t),
                 whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
-                fontFamily: t.display,
               }}>{obs.comName}</span>
               <span style={{
-                fontSize: 9.5, fontWeight: 600, fontFamily: t.mono,
+                ...text.tierPill(t),
                 color: tc.color, background: tc.bg,
-                padding: '2px 6px', borderRadius: 4, border: `1px solid ${tc.border}`,
-                letterSpacing: '0.02em', flexShrink: 0, whiteSpace: 'nowrap',
+                border: `1px solid ${tc.border}`,
+                flexShrink: 0, whiteSpace: 'nowrap',
               }}>{label}</span>
             </div>
 
             {/* Scientific name */}
-            <div style={{ fontSize: 11.5, color: t.fg2, fontStyle: 'italic', marginBottom: 7 }}>
+            <div style={{ ...text.rowSub(t), marginBottom: 7 }}>
               {obs.sciName}
             </div>
 
             {/* Meta row */}
-            <div style={{ display: 'flex', alignItems: 'center', gap: 3, fontSize: 11.5, color: t.fg2, flexWrap: 'wrap' }}>
+            <div style={{ ...text.rowMeta(t), display: 'flex', alignItems: 'center', gap: 3, flexWrap: 'wrap' }}>
               {/* A lock instead of a pin flags a personal location before the
                   user taps in and finds no directions. `onFlyTo` below is map
                   navigation, not routing, so it stays available for both. */}
@@ -829,7 +836,7 @@ function ObsCard({ obs, t, lightMode, yearListActive, focusedCode, onFlyTo, onFo
               {distKm !== undefined && (
                 <>
                   <span style={{ color: t.fg4, margin: '0 2px' }}>·</span>
-                  <span style={{ fontFamily: t.mono, fontSize: 10.5, color: t.fg3 }}>{fmtDist(distKm, useMetric)}</span>
+                  <span style={text.metaChip(t)}>{fmtDist(distKm, useMetric)}</span>
                 </>
               )}
               {chase !== undefined && (
@@ -839,7 +846,7 @@ function ObsCard({ obs, t, lightMode, yearListActive, focusedCode, onFlyTo, onFo
                 </>
               )}
               <span style={{ color: t.fg4, margin: '0 2px' }}>·</span>
-              <span style={{ fontFamily: t.mono, fontSize: 10.5, color: t.fg3 }}>{timeAgo(obs.obsDt)}</span>
+              <span style={text.metaChip(t)}>{timeAgo(obs.obsDt)}</span>
               {/* Lazy: dozens of these mount at once in this list. The observer
                   lives inside the badge, and lib/drive-time.ts coalesces a whole
                   scroll burst into one request. */}
@@ -859,10 +866,7 @@ function ObsCard({ obs, t, lightMode, yearListActive, focusedCode, onFlyTo, onFo
 
       {showChase && (
         <div style={{ padding: '0 16px 12px 29px' }}>
-          <div style={{
-            fontSize: 9.5, fontWeight: 700, fontFamily: t.mono, color: t.fg3,
-            letterSpacing: '0.06em',
-          }}>
+          <div style={text.microCaps(t)}>
             SIGHTING ODDS
           </div>
           <ChasePanel speciesCode={obs.speciesCode} lat={obs.lat} lng={obs.lng} lightMode={lightMode} lazy />
@@ -899,14 +903,13 @@ function TargetCard({ sp, t, isFocused, isDimmed, onFlyTo, onFocusSpecies }: {
       <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
         <TargetIcon size={13} style={{ color: t.target, flexShrink: 0 }}/>
         <div style={{ flex: 1, minWidth: 0 }}>
-          <div style={{ fontSize: 13, fontWeight: 600, color: t.fg0, fontFamily: t.display }}>
+          <div style={text.rowTitle(t)}>
             {sp.comName}
           </div>
-          <div style={{ fontSize: 11.5, color: t.fg2, fontStyle: 'italic' }}>{sp.sciName}</div>
+          <div style={text.rowSub(t)}>{sp.sciName}</div>
         </div>
         <span style={{
-          fontSize: 10, fontFamily: t.mono, fontWeight: 600,
-          padding: '3px 8px', borderRadius: 4,
+          ...text.actionPill(t), padding: '3px 8px',
           color: sp.nearbyCount > 0 ? t.target : t.fg3,
           background: sp.nearbyCount > 0 ? t.targetBg : 'transparent',
           border: `1px solid ${sp.nearbyCount > 0 ? t.targetBorder : t.line2}`,
@@ -934,25 +937,25 @@ function ArrivingCard({ sp, t }: { sp: ArrivingSpecies; t: Theme }) {
       <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
         <div style={{ flex: 1, minWidth: 0 }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 7 }}>
-            <span style={{ fontSize: 13, fontWeight: 600, color: t.fg0, fontFamily: t.display,
+            <span style={{ ...text.rowTitle(t),
               overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
               {sp.comName}
             </span>
             {sp.isLifer && (
               <span style={{
-                fontSize: 9, fontWeight: 700, fontFamily: t.mono, flexShrink: 0,
+                ...text.tierPill(t), fontSize: 9, letterSpacing: '0.03em', flexShrink: 0,
                 color: t.lifer, background: t.liferBg, border: `1px solid ${t.liferBorder}`,
-                borderRadius: 4, padding: '1px 5px', letterSpacing: '0.03em',
+                padding: '1px 5px',
               }}>LIFER</span>
             )}
           </div>
-          <div style={{ fontSize: 11.5, color: t.fg2, fontStyle: 'italic' }}>{sp.sciName}</div>
+          <div style={text.rowSub(t)}>{sp.sciName}</div>
         </div>
         <div style={{ textAlign: 'right', flexShrink: 0 }}>
-          <div style={{ fontSize: 11, fontFamily: t.mono, color: t.target, fontWeight: 600 }}>
+          <div style={{ ...text.sectionCount(t), color: t.target }}>
             ~{formatArrival(sp.arrivalDate)}
           </div>
-          <div style={{ fontSize: 9.5, fontFamily: t.mono, color: t.fg3, marginTop: 1 }}>
+          <div style={{ ...text.metaChip(t), fontSize: 9.5, marginTop: 1 }}>
             {confidence}
           </div>
         </div>

@@ -4,7 +4,7 @@ import { useEffect, useRef, useState } from 'react';
 import type { ClassifiedObservation } from '@/lib/ebird';
 import { loadTaxonomy, searchTaxonomy, type SpeciesEntry } from '@/lib/taxonomy';
 import type { SpeciesMeta } from '@/lib/lifelist';
-import { getTheme } from '@/lib/theme';
+import { getTheme, text } from '@/lib/theme';
 import { SearchIcon, UploadIcon, DownloadIcon, XIcon, CheckIcon } from '@/components/Icons';
 
 const MAX_IMPORT_FILE_BYTES = 5 * 1024 * 1024; // 5 MB — larger files freeze the tab in the synchronous parse
@@ -280,8 +280,12 @@ export default function LifeListPanel({
     return nameA.localeCompare(nameB);
   });
 
+  // The root states `fontFamily` explicitly, as HotspotPanel and
+  // SpeciesDetailPanel already do. It resolves to the same face the document
+  // default gives, but an inherited font is a font nobody chose — this panel is
+  // the one that drifted, and the fix should not depend on globals.css staying put.
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', height: '100%', background: t.bg1 }}>
+    <div style={{ display: 'flex', flexDirection: 'column', height: '100%', background: t.bg1, fontFamily: t.sans }}>
 
       {/* Mode toggle — Life / Year */}
       <div style={{ display: 'flex', gap: 4, padding: '10px 14px', borderBottom: `1px solid ${t.line2}`, background: t.bg0, flexShrink: 0 }}>
@@ -306,18 +310,20 @@ export default function LifeListPanel({
       {/* Stats */}
       <div style={{ display: 'flex', borderBottom: `1px solid ${t.line2}`, flexShrink: 0 }}>
         <div style={{ flex: 1, padding: '14px 20px', borderRight: `1px solid ${t.line2}` }}>
-          <div style={{ fontSize: 10, fontFamily: t.mono, color: t.fg3, letterSpacing: '0.04em', textTransform: 'uppercase', marginBottom: 3 }}>
+          <div style={{ ...text.statLabel(t), marginBottom: 3 }}>
             {yearListActive ? 'Year / Life' : 'Life Total'}
           </div>
-          <div style={{ fontSize: 26, fontWeight: 700, fontFamily: t.display, color: t.accent, letterSpacing: '-0.03em' }}>
+          {/* 20 via the role, not 26. This is the same stat-tile pattern as the
+              Sidebar header's three tiles, six inches up the same column. */}
+          <div style={{ ...text.statValue(t), color: t.accent }}>
             {yearListActive ? `${yearList.length} / ${lifeList.length}` : lifeList.length}
           </div>
         </div>
         <div style={{ flex: 1, padding: '14px 20px' }}>
-          <div style={{ fontSize: 10, fontFamily: t.mono, color: t.fg3, letterSpacing: '0.04em', textTransform: 'uppercase', marginBottom: 3 }}>
+          <div style={{ ...text.statLabel(t), marginBottom: 3 }}>
             Lifers Nearby
           </div>
-          <div style={{ fontSize: 26, fontWeight: 700, fontFamily: t.display, color: t.lifer, letterSpacing: '-0.03em' }}>
+          <div style={{ ...text.statValue(t), color: t.lifer }}>
             {uniqueLiferOps}
           </div>
         </div>
@@ -335,8 +341,8 @@ export default function LifeListPanel({
             onFocus={ensureTaxonomy}
             onChange={e => handleSearch(e.target.value)}
             style={{
+              ...text.body(t),
               width: '100%', padding: '9px 12px 9px 32px',
-              fontSize: 13, fontFamily: t.sans,
               background: t.bg2, border: `1px solid ${query ? t.accentBorder : t.line2}`,
               borderRadius: 8, outline: 'none', color: t.fg0,
               boxSizing: 'border-box', transition: 'border-color 0.15s',
@@ -355,9 +361,10 @@ export default function LifeListPanel({
         {/* Species database loading hint */}
         {taxonomyLoading && query.trim() && (
           <div style={{
+            ...text.emptyState(t),
             marginTop: -4, marginBottom: 8, padding: '9px 12px',
             background: t.cardBg, border: `1px solid ${t.line2}`,
-            borderRadius: 8, fontSize: 12, color: t.fg3, fontFamily: t.mono,
+            borderRadius: 8,
           }}>
             Loading species database…
           </div>
@@ -388,11 +395,14 @@ export default function LifeListPanel({
                     borderBottom: `1px solid ${t.line1}`, opacity: already ? 0.45 : 1,
                     fontFamily: t.sans, transition: 'background 0.12s',
                   }}>
+                  {/* A species name, so it takes the species-name role — this
+                      dropdown used to render in sans 500 while the list 130
+                      lines below rendered the same string in display. */}
                   <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                    <span style={{ fontSize: 13, color: t.fg0, fontWeight: 500 }}>{sp.comName}</span>
+                    <span style={text.rowTitle(t)}>{sp.comName}</span>
                     {already && <CheckIcon size={12} style={{ color: t.lifer }}/>}
                   </div>
-                  <div style={{ fontSize: 11, color: t.fg2, fontStyle: 'italic' }}>{sp.sciName}</div>
+                  <div style={text.rowSub(t)}>{sp.sciName}</div>
                 </button>
               );
             })}
@@ -409,9 +419,10 @@ export default function LifeListPanel({
             style={{
               flex: 1, padding: '8px 0',
               display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6,
+              ...text.control(t), fontSize: 13,
               background: importHov ? t.bg3 : t.bg2, border: `1px solid ${t.line2}`,
-              borderRadius: 8, color: t.fg1, fontSize: 13, fontWeight: 500,
-              cursor: 'pointer', fontFamily: t.sans, transition: 'all 0.15s',
+              borderRadius: 8, color: t.fg1,
+              cursor: 'pointer', transition: 'all 0.15s',
             }}>
             <UploadIcon size={14}/> Import
           </button>
@@ -424,11 +435,12 @@ export default function LifeListPanel({
             style={{
               flex: 1, padding: '8px 0',
               display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6,
+              ...text.control(t), fontSize: 13,
               background: exportHov ? t.bg3 : t.bg2, border: `1px solid ${t.line2}`,
-              borderRadius: 8, fontSize: 13, fontWeight: 500,
+              borderRadius: 8,
               color: lifeList.length === 0 && yearList.length === 0 ? t.fg4 : t.fg1,
               cursor: lifeList.length === 0 && yearList.length === 0 ? 'default' : 'pointer',
-              fontFamily: t.sans, transition: 'all 0.15s',
+              transition: 'all 0.15s',
             }}>
             <DownloadIcon size={14}/> Export
           </button>
@@ -438,9 +450,9 @@ export default function LifeListPanel({
         {importToast && (
           <div style={{
             marginTop: 8, padding: '8px 12px',
+            ...text.body(t), fontSize: 12, color: t.lifer, lineHeight: 1.5,
             background: t.liferBg, border: `1px solid ${t.liferBorder}`,
-            borderRadius: 8, fontSize: 12, color: t.lifer,
-            fontFamily: t.mono, lineHeight: 1.5,
+            borderRadius: 8,
           }}>{importToast}</div>
         )}
 
@@ -455,9 +467,10 @@ export default function LifeListPanel({
               width: '100%', marginTop: 6, padding: '7px 0',
               background: clearHov && activeList.length > 0 ? 'rgba(239,68,68,0.06)' : 'transparent',
               border: `1px solid ${activeList.length === 0 ? 'transparent' : 'rgba(239,68,68,0.22)'}`,
+              ...text.control(t),
               borderRadius: 8, color: activeList.length === 0 ? t.fg4 : clearHov ? '#EF4444' : 'rgba(239,68,68,0.65)',
-              fontSize: 12, fontWeight: 500, cursor: activeList.length === 0 ? 'default' : 'pointer',
-              fontFamily: t.sans, transition: 'all 0.15s',
+              cursor: activeList.length === 0 ? 'default' : 'pointer',
+              transition: 'all 0.15s',
             }}>
             Clear {yearListActive ? 'Year' : 'Life'} List
           </button>
@@ -467,18 +480,20 @@ export default function LifeListPanel({
             background: 'rgba(239,68,68,0.06)', border: '1px solid rgba(239,68,68,0.22)',
             borderRadius: 8, display: 'flex', alignItems: 'center', gap: 8,
           }}>
-            <span style={{ flex: 1, fontSize: 12, color: '#EF4444', fontFamily: t.sans }}>
+            <span style={{ ...text.body(t), flex: 1, fontSize: 12, color: '#EF4444' }}>
               Clear {activeList.length} species?
             </span>
             <button onClick={() => { if (yearListActive) onClearYearList(); else onClearLifeList(); setConfirmClear(false); }} style={{
+              ...text.control(t),
               padding: '4px 12px', background: 'rgba(239,68,68,0.12)',
               border: '1px solid rgba(239,68,68,0.35)', borderRadius: 6,
-              color: '#EF4444', fontSize: 12, fontWeight: 600, cursor: 'pointer', fontFamily: t.sans,
+              color: '#EF4444', cursor: 'pointer',
             }}>Yes</button>
             <button onClick={() => setConfirmClear(false)} style={{
+              ...text.control(t),
               padding: '4px 12px', background: t.bg2,
               border: `1px solid ${t.line2}`, borderRadius: 6,
-              color: t.fg2, fontSize: 12, fontWeight: 500, cursor: 'pointer', fontFamily: t.sans,
+              color: t.fg2, cursor: 'pointer',
             }}>No</button>
           </div>
         )}
@@ -487,7 +502,7 @@ export default function LifeListPanel({
       {/* List */}
       <div style={{ flex: 1, overflowY: 'auto' }}>
         {activeList.length === 0 ? (
-          <div style={{ padding: '32px 20px', textAlign: 'center', color: t.fg3, fontSize: 13, fontFamily: t.sans }}>
+          <div style={{ ...text.emptyState(t), fontSize: 13, padding: '32px 20px', textAlign: 'center' }}>
             <div style={{ marginBottom: 10 }}>
               <svg width="36" height="36" viewBox="0 0 24 24" fill="none" stroke={t.fg4} strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" style={{ display: 'block', margin: '0 auto' }}>
                 <path d="M16 7h.01"/><path d="M3.4 18H12a8 8 0 0 0 8-8V7a4 4 0 0 0-7.28-2.3L2 20"/><path d="m20 7 2 .5-2 .5"/><path d="M10 18v3"/><path d="M14 17.75V21"/><path d="M7 18a6 6 0 0 0 3.84-10.61"/>
@@ -518,17 +533,22 @@ export default function LifeListPanel({
                 }}>
                 <span style={{ width: 6, height: 6, borderRadius: '50%', background: t.accent, flexShrink: 0, opacity: 0.8 }}/>
                 <div style={{ flex: 1, minWidth: 0 }}>
-                  <div style={{ fontSize: 13, fontWeight: 500, color: t.fg0, fontFamily: t.display, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                  <div style={{ ...text.rowTitle(t), overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                     {name}
                   </div>
+                  {/* `rowMeta`, not `metaChip`. This is prose — a formatted date
+                      and a place name, built at `subtitle` above — and it used to
+                      render in IBM Plex Mono. Mono in this app is for short
+                      numeric readouts; a monospaced sentence is most of what
+                      made this panel look like a different app. */}
                   {subtitle && (
-                    <div style={{ fontSize: 10.5, color: t.fg3, marginTop: 1, fontFamily: t.mono, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                    <div style={{ ...text.rowMeta(t), marginTop: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                       {subtitle}
                     </div>
                   )}
                 </div>
                 {meta?.totalCount && meta.totalCount > 1 && (
-                  <span style={{ fontSize: 10.5, fontFamily: t.mono, color: t.fg3, flexShrink: 0 }}>×{meta.totalCount}</span>
+                  <span style={{ ...text.metaChip(t), flexShrink: 0 }}>×{meta.totalCount}</span>
                 )}
                 <button onClick={() => removeFn(code)} title={`Remove from ${yearListActive ? 'year' : 'life'} list`} style={{
                   background: 'transparent', border: 'none', cursor: 'pointer',

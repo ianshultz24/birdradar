@@ -3,7 +3,7 @@
 import { useEffect, useState } from 'react';
 import type { Hotspot, Observation } from '@/lib/ebird';
 import { timeAgo, parseObsDt } from '@/lib/ebird';
-import { getTheme } from '@/lib/theme';
+import { getTheme, text } from '@/lib/theme';
 import { hotspotDirectionsUrl } from '@/lib/location-privacy';
 import { CheckIcon, NavigationIcon, XIcon } from '@/components/Icons';
 import { DETAIL_PANEL_WIDTH } from '@/components/SpeciesDetailPanel';
@@ -138,10 +138,12 @@ export default function HotspotPanel({
       <div style={{ padding: '14px 16px', borderBottom: `1px solid ${t.line2}`, background: t.bg2, flexShrink: 0 }}>
         <div style={{ display: 'flex', alignItems: 'flex-start', gap: 10 }}>
           <div style={{ flex: 1, minWidth: 0 }}>
-            <div style={{ fontSize: 14, fontWeight: 600, color: t.fg0, fontFamily: t.display, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+            {/* 14, not the role's 17: this is a place name, and place names are
+                long. At 17 the ellipsis eats most of them in a 340px column. */}
+            <div style={{ ...text.panelTitle(t), fontSize: 14, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
               {hotspot.locName}
             </div>
-            <div style={{ fontSize: 11, color: t.fg3, fontFamily: t.mono, marginTop: 2 }}>
+            <div style={{ ...text.metaChip(t), marginTop: 2 }}>
               {hotspot.numSpeciesAllTime > 0 ? `${hotspot.numSpeciesAllTime} spp all time` : hotspot.locId}
               {hotspot.latestObsDt && <span style={{ marginLeft: 8 }}>· last obs {timeAgo(hotspot.latestObsDt)}</span>}
             </div>
@@ -158,8 +160,8 @@ export default function HotspotPanel({
               display: 'flex', alignItems: 'center', gap: 5, flexShrink: 0,
               padding: '5px 9px', borderRadius: 6,
               background: t.accentBg, border: `1px solid ${t.accentBorder}`,
-              color: t.accent, fontSize: 11, fontWeight: 600,
-              textDecoration: 'none', fontFamily: t.sans,
+              ...text.control(t), fontSize: 11,
+              color: t.accent, textDecoration: 'none',
             }}
           >
             <NavigationIcon size={11} />
@@ -188,28 +190,31 @@ export default function HotspotPanel({
         padding: '10px 16px', background: t.bg2, borderBottom: `1px solid ${t.line1}`,
         flexShrink: 0,
       }}>
-        <span style={{ fontSize: 11, fontWeight: 600, color: t.fg1, fontFamily: t.sans, letterSpacing: '0.03em' }}>
+        <span style={text.sectionLabel(t)}>
           Recent Species (14 days)
         </span>
+        {/* fg3 via the role, not t.accent. AlertsPanel's section counts are
+            fg3 unless the section has a tier dot to borrow a colour from
+            (AlertsPanel.tsx SectionHeader); this one has no dot. */}
         {!loading && !error && (
-          <span style={{ fontSize: 11, fontFamily: t.mono, color: t.accent, fontWeight: 600 }}>{obs.length}</span>
+          <span style={text.sectionCount(t)}>{obs.length}</span>
         )}
       </div>
 
       {/* List */}
       <div style={{ flex: 1, overflowY: 'auto' }}>
         {loading && (
-          <div style={{ padding: 28, textAlign: 'center', color: t.fg3, fontSize: 12, fontFamily: t.mono }}>
+          <div style={{ ...text.emptyState(t), padding: 28, textAlign: 'center' }}>
             Loading…
           </div>
         )}
         {error && (
-          <div style={{ padding: 24, textAlign: 'center', color: '#EF4444', fontSize: 13, fontFamily: t.sans }}>
+          <div style={{ ...text.emptyState(t), padding: 24, textAlign: 'center', color: '#EF4444' }}>
             Failed to load observations.
           </div>
         )}
         {!loading && !error && obs.length === 0 && (
-          <div style={{ padding: 24, textAlign: 'center', color: t.fg3, fontSize: 13, fontFamily: t.sans }}>
+          <div style={{ ...text.emptyState(t), padding: 24, textAlign: 'center' }}>
             No recent observations found.
           </div>
         )}
@@ -228,30 +233,34 @@ export default function HotspotPanel({
               }}>
               <span style={{ width: 6, height: 6, borderRadius: '50%', background: onList ? t.seen : t.accent, flexShrink: 0, opacity: 0.8 }}/>
               <div style={{ flex: 1, minWidth: 0 }}>
-                <div style={{ fontSize: 13, fontWeight: 500, color: t.fg0, fontFamily: t.display, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                {/* Was weight 500 while AlertsPanel's identical row was 600.
+                    Space Grotesk is a variable font, so both weights are real
+                    and the gap reads as two different typefaces at 13px — the
+                    reported symptom. The role owns the weight now. */}
+                <div style={{ ...text.rowTitle(t), overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                   {o.comName}
                 </div>
-                <div style={{ fontSize: 11, color: t.fg2, fontStyle: 'italic', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                <div style={{ ...text.rowSub(t), overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                   {o.sciName}
                 </div>
               </div>
               <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 4, flexShrink: 0 }}>
-                <span style={{ fontSize: 10.5, color: t.fg3, fontFamily: t.mono }}>{timeAgo(o.obsDt)}</span>
-                {o.howMany && <span style={{ fontSize: 10, color: t.fg3, fontFamily: t.mono }}>×{o.howMany}</span>}
+                <span style={text.metaChip(t)}>{timeAgo(o.obsDt)}</span>
+                {o.howMany && <span style={{ ...text.metaChip(t), fontSize: 10 }}>×{o.howMany}</span>}
                 {!onList ? (
                   <button
                     onClick={() => onAddToLifeList(o.speciesCode, o.comName, o.sciName)}
                     onMouseEnter={() => setHoveredAddCode(o.speciesCode)}
                     onMouseLeave={() => setHoveredAddCode(null)}
                     style={{
-                      fontSize: 10, padding: '3px 8px',
+                      ...text.actionPill(t), padding: '3px 8px',
                       background: hoveredAddCode === o.speciesCode ? t.accentBorder : t.accentBg,
                       border: `1px solid ${t.accentBorder}`,
-                      borderRadius: 5, color: t.accent, cursor: 'pointer',
-                      fontFamily: t.mono, fontWeight: 600, transition: 'background 0.12s',
+                      color: t.accent, cursor: 'pointer',
+                      transition: 'background 0.12s',
                     }}>+ Add</button>
                 ) : (
-                  <span style={{ display: 'flex', alignItems: 'center', gap: 3, fontSize: 10, color: t.lifer, fontFamily: t.mono }}>
+                  <span style={{ ...text.metaChip(t), fontSize: 10, color: t.lifer, display: 'flex', alignItems: 'center', gap: 3 }}>
                     <CheckIcon size={10}/> Seen
                   </span>
                 )}

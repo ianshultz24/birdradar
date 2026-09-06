@@ -4,7 +4,7 @@ import { useEffect, useMemo, useState } from 'react';
 
 import type { ClassifiedObservation } from '@/lib/ebird';
 import { timeAgo } from '@/lib/ebird';
-import { getTheme, tierTokens, tierLabel, type Theme } from '@/lib/theme';
+import { getTheme, tierTokens, tierLabel, text, type Theme } from '@/lib/theme';
 import { getSpeciesPhotoUrl } from '@/lib/species-photo';
 import {
   formatCoords,
@@ -158,20 +158,19 @@ export default function SpeciesDetailPanel({
       }}>
         <div style={{ flex: 1, minWidth: 0 }}>
           <div style={{ marginBottom: 6 }}>
+            {/* Tracking comes from the role (0.02em). This badge was at 0.04em
+                while the identical badge on every AlertsPanel card was at
+                0.02em — the two panels sit side by side. */}
             <span style={{
-              fontSize: 9.5, fontWeight: 700, fontFamily: t.mono,
+              ...text.tierPill(t),
               background: tc.bg, color: tc.color,
               border: `1px solid ${tc.border}`,
-              borderRadius: 4, padding: '2px 6px', letterSpacing: '0.04em',
             }}>{tierLabel(obs.tier)}</span>
           </div>
-          <div style={{
-            fontSize: 17, fontWeight: 700, color: t.fg0, fontFamily: t.display,
-            letterSpacing: '-0.02em', lineHeight: 1.2,
-          }}>
+          <div style={text.panelTitle(t)}>
             {obs.comName}
           </div>
-          <div style={{ fontSize: 12, color: t.fg2, fontStyle: 'italic', marginTop: 2 }}>
+          <div style={{ ...text.rowSub(t), fontSize: 12, marginTop: 2 }}>
             {obs.sciName}
           </div>
         </div>
@@ -201,7 +200,7 @@ export default function SpeciesDetailPanel({
             aria-label="Previous species"
             style={pagerBtnStyle(t, safeIndex === 0)}
           >‹</button>
-          <span style={{ fontSize: 10, color: t.fg3, fontFamily: t.mono, letterSpacing: '0.06em' }}>
+          <span style={{ ...text.caption(t), fontSize: 10, letterSpacing: '0.06em' }}>
             {safeIndex + 1} / {ordered.length} species here
           </span>
           <button
@@ -219,10 +218,7 @@ export default function SpeciesDetailPanel({
 
         {chaseWorthwhile && (
           <div style={{ marginBottom: 14 }}>
-            <div style={{
-              fontSize: 9.5, fontWeight: 700, fontFamily: t.mono, color: t.fg3,
-              letterSpacing: '0.06em',
-            }}>
+            <div style={text.microCaps(t)}>
               SIGHTING ODDS
             </div>
             <ChasePanel
@@ -316,25 +312,26 @@ function LocationRow({ obs, theme: t, driveOrigin, lightMode }: {
       {isPrivate ? (
         <>
           <div style={{
+            ...text.cardTitle(t),
             display: 'flex', alignItems: 'center', gap: 6,
-            fontSize: 12.5, color: t.fg1, fontWeight: 600, lineHeight: 1.35,
           }}>
             <LockIcon size={12} style={{ color: t.fg3 }} />
             {PRIVATE_LOCATION_LABEL}
           </div>
-          <div style={{ fontSize: 11.5, color: t.fg3, lineHeight: 1.35, marginTop: 2 }}>
+          <div style={{ ...text.rowMeta(t), color: t.fg3, lineHeight: 1.35, marginTop: 2 }}>
             {obs.locName}
           </div>
         </>
       ) : (
-        <div style={{ fontSize: 12.5, color: t.fg1, fontWeight: 600, lineHeight: 1.35 }}>
+        <div style={text.cardTitle(t)}>
           {obs.locName}
         </div>
       )}
 
       <div style={{
+        ...text.metaChip(t),
         display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 10,
-        fontSize: 11.5, color: t.fg3, fontFamily: t.mono, marginTop: 6,
+        marginTop: 6,
       }}>
         <span>{obs.howMany ? `${obs.howMany}×` : '1×'}</span>
         <span>{timeAgo(obs.obsDt)}</span>
@@ -353,7 +350,7 @@ function LocationRow({ obs, theme: t, driveOrigin, lightMode }: {
       </div>
 
       {obs.reportCount != null && obs.reportCount > 1 && (
-        <div style={{ fontSize: 11, color: t.fg3, fontFamily: t.mono, marginTop: 4 }}>
+        <div style={{ ...text.rowMeta(t), color: t.fg3, marginTop: 4 }}>
           Reported {obs.reportCount}× this week here
         </div>
       )}
@@ -369,9 +366,8 @@ function LocationRow({ obs, theme: t, driveOrigin, lightMode }: {
             display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6,
             marginTop: 10, padding: '7px 0',
             background: t.accentBg, border: `1px solid ${t.accentBorder}`,
-            borderRadius: 8, color: t.accent,
-            fontSize: 12, fontWeight: 600, textDecoration: 'none',
-            fontFamily: t.sans,
+            ...text.control(t),
+            borderRadius: 8, color: t.accent, textDecoration: 'none',
           }}
         >
           <NavigationIcon size={12} />
@@ -380,8 +376,8 @@ function LocationRow({ obs, theme: t, driveOrigin, lightMode }: {
       ) : (
         // A silently missing button reads as a bug; say it was a decision.
         <div style={{
-          marginTop: 8, fontSize: 10.5, color: t.fg3,
-          lineHeight: 1.4, fontStyle: 'italic',
+          ...text.emptyState(t), fontSize: 10.5,
+          marginTop: 8, lineHeight: 1.4,
         }}>
           {PRIVATE_LOCATION_HINT}
         </div>
@@ -408,16 +404,16 @@ function AddToLifeList({
   const [addLoc, setAddLoc] = useState('');
 
   const inputStyle: React.CSSProperties = {
+    ...text.body(t), fontSize: 12,
     width: '100%', padding: '6px 9px',
     background: t.bg2, border: `1px solid ${t.line2}`,
-    borderRadius: 6, color: t.fg0, fontSize: 12,
+    borderRadius: 6, color: t.fg0,
     outline: 'none', boxSizing: 'border-box',
-    fontFamily: t.sans,
   };
 
   if (isOnLifeList) {
     return (
-      <div style={{ textAlign: 'center', fontSize: 11, color: t.accent, padding: '6px 0', fontFamily: t.mono }}>
+      <div style={{ ...text.metaChip(t), fontSize: 11, color: t.accent, textAlign: 'center', padding: '6px 0' }}>
         ✓ On life list
       </div>
     );
@@ -434,9 +430,8 @@ function AddToLifeList({
         style={{
           width: '100%', padding: '9px 0',
           background: t.accentBg, border: `1px solid ${t.accentBorder}`,
-          borderRadius: 8, color: t.accent,
-          fontSize: 12.5, fontWeight: 600, cursor: 'pointer',
-          fontFamily: t.sans,
+          ...text.control(t), fontSize: 12.5,
+          borderRadius: 8, color: t.accent, cursor: 'pointer',
         }}
       >
         + Add to Life List
@@ -457,8 +452,8 @@ function AddToLifeList({
           style={{
             flex: 1, padding: '6px 0',
             background: t.accentBg, border: `1px solid ${t.accentBorder}`,
-            borderRadius: 6, color: t.accent,
-            fontSize: 11.5, fontWeight: 700, cursor: 'pointer', fontFamily: t.sans,
+            ...text.control(t), fontSize: 11.5, fontWeight: 700,
+            borderRadius: 6, color: t.accent, cursor: 'pointer',
           }}
         >
           ✓ Confirm
@@ -468,7 +463,8 @@ function AddToLifeList({
           style={{
             padding: '6px 12px',
             background: 'transparent', border: `1px solid ${t.line2}`,
-            borderRadius: 6, color: t.fg2, fontSize: 11.5, cursor: 'pointer', fontFamily: t.sans,
+            ...text.control(t), fontSize: 11.5, fontWeight: 400,
+            borderRadius: 6, color: t.fg2, cursor: 'pointer',
           }}
         >
           Cancel

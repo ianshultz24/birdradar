@@ -5,7 +5,7 @@ import type { ClassifiedObservation, AppSettings, Hotspot, TargetSpecies } from 
 import type { SpeciesMeta } from '@/lib/lifelist';
 import type { ArrivingSpecies } from '@/lib/forecast';
 import type { SyncPayload } from '@/lib/sync-client';
-import { getTheme } from '@/lib/theme';
+import { getTheme, text } from '@/lib/theme';
 import type { SortMode } from '@/lib/alerts-sort';
 import { BellIcon, BirdIcon, SettingsIcon } from '@/components/Icons';
 import AlertsPanel from './AlertsPanel';
@@ -264,14 +264,13 @@ export default function Sidebar(props: Props) {
               <circle cx="13" cy="13" r="2.5" fill={t.accent}/>
             </svg>
             <span style={{
-              fontSize: 18, fontWeight: 700, fontFamily: t.display,
-              letterSpacing: '-0.03em', color: t.fg0,
+              ...text.statValue(t), fontSize: 18, color: t.fg0,
             }}>BirdRadar</span>
           </div>
           {/* Live badge */}
           <div style={{
             display: 'flex', alignItems: 'center', gap: 5,
-            fontSize: 11, fontFamily: t.mono, color: t.accent, fontWeight: 500,
+            ...text.metaChip(t), fontSize: 11, color: t.accent, fontWeight: 500,
             background: t.accentBg, border: `1px solid ${t.accentBorder}`,
             borderRadius: 6, padding: '3px 8px',
           }}>
@@ -297,13 +296,13 @@ export default function Sidebar(props: Props) {
               flex: 1, padding: '10px 12px',
               borderRight: i < 2 ? `1px solid ${t.line2}` : 'none',
             }}>
+              {/* Same two roles as LifeListPanel's stat tiles — that panel's
+                  value was at 26 while this one is at 20, and they are in the
+                  same column a few inches apart. */}
+              <div style={{ ...text.statLabel(t), marginBottom: 2 }}>{s.label}</div>
               <div style={{
-                fontSize: 10, color: t.fg3, fontFamily: t.mono,
-                letterSpacing: '0.04em', textTransform: 'uppercase', marginBottom: 2,
-              }}>{s.label}</div>
-              <div style={{
-                fontSize: 20, fontWeight: 700, fontFamily: t.display,
-                color: s.accent ? t.accent : t.fg0, letterSpacing: '-0.03em',
+                ...text.statValue(t),
+                color: s.accent ? t.accent : t.fg0,
               }}>{s.value}</div>
             </div>
           ))}
