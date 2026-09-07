@@ -1,6 +1,7 @@
 import { type NextRequest } from 'next/server';
 import { redis } from './redis';
-import { rateLimit } from './ratelimit';
+import { rateLimit, peekRateLimit } from './ratelimit';
+import { readDevSession } from './dev/auth';
 
 /**
  * Shared eBird plumbing for all /api/ebird/* routes and the server-side push
@@ -92,21 +93,62 @@ async function takeUpstreamBudget(): Promise<boolean> {
 
 // ─── Response cache (L1 in-memory + shared Redis, with stale copies) ─────────
 
+/**
+ * Which tier answered. Reported to a verified developer session through
+ * `x-br-cache`; `'miss'` also covers a bypass that then went upstream.
+ */
+export type CacheTier =
+  | 'memory-fresh'
+  | 'memory-stale'
+  | 'redis-fresh'
+  | 'redis-stale'
+  | 'miss'
+  | 'bypass';
+
+/**
+ * A cache answer plus where it came from.
+ *
+ * ─── Why `ageMs` is null for the Redis tiers ─────────────────────────────────
+ *
+ * `storedAt` is added to the in-memory entry, where it costs one number. The
+ * Redis tier stores the payload **raw** (`redis.set('br:fresh:' + key, data)`),
+ * so age is not recoverable from it — and it stays that way deliberately.
+ * Wrapping the value as `{ v, at }` to carry a timestamp would invalidate every
+ * existing shared cache entry on deploy, producing a cold-start burst against
+ * the eBird upstream budget, and would add an unwrap to every read path — all to
+ * put a number on a debug overlay.
+ *
+ * So the overlay shows an exact age for a memory hit and a dash for a Redis hit.
+ * A dash is the honest answer; a `0` would be a fabricated one. Same rule as the
+ * odds chip in `PhaseE1_fixes.md` §4e: an unknown value must never borrow the
+ * look of a known one.
+ */
+interface CacheHit {
+  data: unknown;
+  tier: CacheTier;
+  ageMs: number | null;
+}
+
 interface CacheEntry {
   freshUntil: number;
   staleUntil: number;
+  /** For the debug overlay only. Nothing in the request path reads it. */
+  storedAt: number;
   data: unknown;
 }
 
 const MEMORY_CACHE_MAX_ENTRIES = 200;
 const responseCache = new Map<string, CacheEntry>();
 
-function memoryCacheGet(key: string, allowStale: boolean): unknown | undefined {
+function memoryCacheGet(key: string, allowStale: boolean): CacheHit | undefined {
   const entry = responseCache.get(key);
   if (!entry) return undefined;
   const now = Date.now();
-  if (now <= entry.freshUntil) return entry.data;
-  if (allowStale && now <= entry.staleUntil) return entry.data;
+  const ageMs = now - entry.storedAt;
+  if (now <= entry.freshUntil) return { data: entry.data, tier: 'memory-fresh', ageMs };
+  if (allowStale && now <= entry.staleUntil) {
+    return { data: entry.data, tier: 'memory-stale', ageMs };
+  }
   if (now > entry.staleUntil) responseCache.delete(key);
   return undefined;
 }
@@ -117,21 +159,25 @@ function memoryCacheSet(key: string, data: unknown, ttlMs: number): void {
     const oldest = responseCache.keys().next().value;
     if (oldest !== undefined) responseCache.delete(oldest);
   }
+  const now = Date.now();
   responseCache.set(key, {
-    freshUntil: Date.now() + ttlMs,
-    staleUntil: Date.now() + STALE_TTL_MS,
+    freshUntil: now + ttlMs,
+    staleUntil: now + STALE_TTL_MS,
+    storedAt: now,
     data,
   });
 }
 
-async function cacheGetFresh(key: string): Promise<unknown | undefined> {
+async function cacheGetFresh(key: string): Promise<CacheHit | undefined> {
   const memory = memoryCacheGet(key, false);
   if (memory !== undefined) return memory;
 
   if (redis) {
     try {
       const data = await redis.get(`br:fresh:${key}`);
-      if (data !== null && data !== undefined) return data;
+      if (data !== null && data !== undefined) {
+        return { data, tier: 'redis-fresh', ageMs: null };
+      }
     } catch {
       // Upstash unreachable — treat as miss
     }
@@ -139,14 +185,16 @@ async function cacheGetFresh(key: string): Promise<unknown | undefined> {
   return undefined;
 }
 
-async function cacheGetStale(key: string): Promise<unknown | undefined> {
+async function cacheGetStale(key: string): Promise<CacheHit | undefined> {
   const memory = memoryCacheGet(key, true);
   if (memory !== undefined) return memory;
 
   if (redis) {
     try {
       const data = await redis.get(`br:stale:${key}`);
-      if (data !== null && data !== undefined) return data;
+      if (data !== null && data !== undefined) {
+        return { data, tier: 'redis-stale', ageMs: null };
+      }
     } catch {
       // Upstash unreachable — treat as miss
     }
@@ -172,8 +220,21 @@ async function cacheSet(key: string, data: unknown, ttlMs: number): Promise<void
 // ─── Core cached fetch (shared by the HTTP proxy and the push watcher) ────────
 
 export type EbirdResult =
-  | { ok: true; data: unknown; stale: boolean }
-  | { ok: false; status: number; error: string };
+  | { ok: true; data: unknown; stale: boolean; tier: CacheTier; ageMs: number | null }
+  | { ok: false; status: number; error: string; tier: CacheTier };
+
+export interface FetchEbirdOptions {
+  /**
+   * Skip **both** cache tiers on the way in. Set only for a request carrying
+   * `x-dev-nocache: 1` on a verified developer session — see `proxyEbird`.
+   *
+   * The result is still *written* to the cache, so this is a forced refresh
+   * rather than a private read: the next ordinary visitor benefits. The stale
+   * fallback on error is also still in play, because "I asked for fresh data"
+   * is not a reason to prefer an error page over a day-old answer.
+   */
+  bypassCache?: boolean;
+}
 
 /**
  * Fetch an eBird path through the shared cache + global budget, with stale
@@ -183,20 +244,34 @@ export type EbirdResult =
 export async function fetchEbirdCached(
   upstreamPath: string,
   sMaxAge: number,
-  transform?: (data: unknown) => unknown
+  transform?: (data: unknown) => unknown,
+  options?: FetchEbirdOptions
 ): Promise<EbirdResult> {
   const apiKey = process.env.EBIRD_API_KEY;
-  if (!apiKey) return { ok: false, status: 500, error: 'Server configuration error' };
+  if (!apiKey) {
+    return { ok: false, status: 500, error: 'Server configuration error', tier: 'miss' };
+  }
 
-  const cached = await cacheGetFresh(upstreamPath);
-  if (cached !== undefined) return { ok: true, data: cached, stale: false };
+  if (!options?.bypassCache) {
+    const cached = await cacheGetFresh(upstreamPath);
+    if (cached !== undefined) {
+      return { ok: true, data: cached.data, stale: false, tier: cached.tier, ageMs: cached.ageMs };
+    }
+  }
 
   // Only cache misses consume upstream budget; when the deployment-wide budget
   // is exhausted, serve stale data rather than hammering the eBird key.
+  //
+  // A bypass consumes budget exactly like a miss, which is the point: it is a
+  // debugging tool, not a free refresh. UPSTREAM_BUDGET_PER_MIN is shared across
+  // every instance *and* every local dev server (phaseB_rationale.md §6), so
+  // holding the flag on through a busy session can starve the real app.
   if (!(await takeUpstreamBudget())) {
     const stale = await cacheGetStale(upstreamPath);
-    if (stale !== undefined) return { ok: true, data: stale, stale: true };
-    return { ok: false, status: 503, error: 'Service is busy, please retry shortly' };
+    if (stale !== undefined) {
+      return { ok: true, data: stale.data, stale: true, tier: stale.tier, ageMs: stale.ageMs };
+    }
+    return { ok: false, status: 503, error: 'Service is busy, please retry shortly', tier: 'miss' };
   }
 
   try {
@@ -208,20 +283,61 @@ export async function fetchEbirdCached(
 
     if (!res.ok) {
       const stale = await cacheGetStale(upstreamPath);
-      if (stale !== undefined) return { ok: true, data: stale, stale: true };
-      return { ok: false, status: res.status, error: `eBird API error: ${res.status}` };
+      if (stale !== undefined) {
+        return { ok: true, data: stale.data, stale: true, tier: stale.tier, ageMs: stale.ageMs };
+      }
+      return {
+        ok: false,
+        status: res.status,
+        error: `eBird API error: ${res.status}`,
+        tier: 'miss',
+      };
     }
 
     const raw = await res.json();
     const data = transform ? transform(raw) : raw;
     await cacheSet(upstreamPath, data, sMaxAge * 1000);
-    return { ok: true, data, stale: false };
+    return {
+      ok: true,
+      data,
+      stale: false,
+      tier: options?.bypassCache ? 'bypass' : 'miss',
+      ageMs: 0,
+    };
   } catch {
     // Timeout or network failure — a day-old answer beats an error page
     const stale = await cacheGetStale(upstreamPath);
-    if (stale !== undefined) return { ok: true, data: stale, stale: true };
-    return { ok: false, status: 500, error: 'Failed to fetch from eBird' };
+    if (stale !== undefined) {
+      return { ok: true, data: stale.data, stale: true, tier: stale.tier, ageMs: stale.ageMs };
+    }
+    return { ok: false, status: 500, error: 'Failed to fetch from eBird', tier: 'miss' };
   }
+}
+
+/**
+ * Read-only snapshot of the deployment-wide upstream budget, for the Developer
+ * Mode overlay. Consumes nothing. Returns `used: null` when the answer is not
+ * knowable (no Redis, or Upstash unreachable) rather than guessing.
+ */
+export async function peekUpstreamBudget(): Promise<{
+  used: number | null;
+  max: number;
+  bucket: number;
+}> {
+  const bucket = Math.floor(Date.now() / 60_000);
+  const max = UPSTREAM_BUDGET_PER_MIN;
+
+  if (redis) {
+    try {
+      const raw = await redis.get<number>(`br:budget:${bucket}`);
+      return { used: typeof raw === 'number' ? raw : Number(raw ?? 0), max, bucket };
+    } catch {
+      return { used: null, max, bucket };
+    }
+  }
+
+  // Per-instance counter. Only meaningful for the bucket it belongs to.
+  return { used: bucket === memoryBudgetBucket ? memoryBudgetCount : 0, max, bucket };
 }
 
 // ─── HTTP proxy (per-IP rate-limited wrapper around fetchEbirdCached) ─────────
@@ -237,18 +353,74 @@ export interface ProxyOptions {
   transform?: (data: unknown) => unknown;
 }
 
+/** eBird proxy per-IP limit. Named so `proxyEbird` and the debug peek agree. */
+const EBIRD_RATE_LIMIT = { name: 'ebird', max: 30, windowSec: 60 } as const;
+
+/**
+ * Debug headers for a verified developer session.
+ *
+ * Everything here is gated on `readDevSession(request.cookies)` and is
+ * unreachable without it — including the cache bypass. A forged `br_dev_flags`
+ * cookie gets none of it: `readDevSession` reads `br_dev`, which is httpOnly and
+ * HMAC-signed, and ignores the flags cookie entirely.
+ *
+ * Attached to the *response* so the overlay reads real per-request numbers off
+ * the very fetches the page just made, rather than polling something adjacent
+ * and hoping it correlates.
+ */
+async function devDebugHeaders(
+  request: NextRequest,
+  result: EbirdResult
+): Promise<Record<string, string>> {
+  const [budget, rateRemaining] = await Promise.all([
+    peekUpstreamBudget(),
+    peekRateLimit(request, EBIRD_RATE_LIMIT.name, EBIRD_RATE_LIMIT.max, EBIRD_RATE_LIMIT.windowSec),
+  ]);
+
+  const headers: Record<string, string> = {
+    'x-br-cache': result.tier,
+    'x-br-budget-max': String(budget.max),
+    'x-br-ratelimit-max': String(EBIRD_RATE_LIMIT.max),
+  };
+
+  // Absent rather than a placeholder wherever the number is genuinely unknown.
+  // A header that is missing reads as "unknown" in the overlay; a `0` would read
+  // as a measurement.
+  if (result.ok && result.ageMs !== null) headers['x-br-cache-age'] = String(result.ageMs);
+  if (budget.used !== null) {
+    headers['x-br-budget-remaining'] = String(Math.max(0, budget.max - budget.used));
+  }
+  if (rateRemaining !== null) headers['x-br-ratelimit-remaining'] = String(rateRemaining);
+
+  return headers;
+}
+
 export async function proxyEbird(request: NextRequest, opts: ProxyOptions): Promise<Response> {
-  if (await rateLimit(request, 'ebird', 30, 60)) {
+  // Local, synchronous, no I/O — an HMAC verify against a cookie.
+  const isDev = readDevSession(request.cookies);
+
+  if (
+    await rateLimit(request, EBIRD_RATE_LIMIT.name, EBIRD_RATE_LIMIT.max, EBIRD_RATE_LIMIT.windowSec)
+  ) {
     return Response.json(
       { error: 'Too many requests' },
       { status: 429, headers: { 'Retry-After': '60', 'Cache-Control': 'no-store' } }
     );
   }
 
-  const result = await fetchEbirdCached(opts.upstreamPath, opts.sMaxAge, opts.transform);
+  // The bypass requires a verified session, not merely the header. The header is
+  // trivially forgeable; without this check any client could evict the shared
+  // cache and drain the upstream budget at will.
+  const bypassCache = isDev && request.headers.get('x-dev-nocache') === '1';
+
+  const result = await fetchEbirdCached(opts.upstreamPath, opts.sMaxAge, opts.transform, {
+    bypassCache,
+  });
+
+  const debug = isDev ? await devDebugHeaders(request, result) : {};
 
   if (!result.ok) {
-    const headers: Record<string, string> = { 'Cache-Control': 'no-store' };
+    const headers: Record<string, string> = { 'Cache-Control': 'no-store', ...debug };
     if (result.status === 503) headers['Retry-After'] = '30';
     return Response.json({ error: result.error }, { status: result.status, headers });
   }
@@ -257,5 +429,11 @@ export async function proxyEbird(request: NextRequest, opts: ProxyOptions): Prom
     ? { 'Cache-Control': 'public, s-maxage=60', 'X-BirdRadar-Stale': '1' }
     : { 'Cache-Control': `public, s-maxage=${opts.sMaxAge}, stale-while-revalidate=${opts.staleWhileRevalidate}` };
 
-  return Response.json(result.data, { headers });
+  // A bypassed response must never be stored by a CDN — it was fetched
+  // precisely to get around a cache, and letting it populate a shared one would
+  // hand the developer's forced refresh to every subsequent visitor as if it
+  // were a normal cacheable answer.
+  if (bypassCache) headers['Cache-Control'] = 'no-store';
+
+  return Response.json(result.data, { headers: { ...headers, ...debug } });
 }

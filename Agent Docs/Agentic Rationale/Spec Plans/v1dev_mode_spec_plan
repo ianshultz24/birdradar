@@ -1,0 +1,153 @@
+# Claude Code prompt — Developer Mode + maintenance toggle
+
+Add a Developer Mode to this app: a password-gated in-site panel for testing against
+production, plus a one-click switch that puts the public site into a maintenance state
+with a custom reason.
+
+**Do not write code yet.** Read the codebase first, then present a plan and file list for
+my review. Wait for approval before implementing.
+
+---
+
+## Environment notes (verify these against the repo — do not assume)
+
+- This is **Next.js 16 App Router**. Request interception is `proxy.ts` at the project root
+  (or in `src/`), with a default export named `proxy`. `middleware.ts` still works but is
+  deprecated. If the repo has a `middleware.ts`, migrate it as part of this work.
+- `proxy.ts` runs on the **Node.js runtime**, so `node:crypto` is available — use it for
+  HMAC rather than a Web Crypto workaround.
+- `NextResponse.rewrite(url, { status })` does **not** reliably set the status code. To
+  return a real 503, build the response body and return it directly from `proxy.ts`.
+- Reuse the existing Redis client, cache layer, and per-IP rate limiter. Find them before
+  writing anything new. Do not restructure or rename existing modules.
+
+---
+
+## 1. Ops state (Redis)
+
+Redis key `br:ops:mode`, JSON:
+
+```
+{ state: "live" | "degraded" | "down",
+  reason: string,
+  until: number | null,   // epoch ms; auto-lift
+  setAt: number }
+```
+
+Read it in `proxy.ts` behind a **module-scope in-memory cache with a ~15s TTL** so warm
+instances don't hit Redis on every request.
+
+Resolution order:
+1. If `process.env.OPS_FORCE_DOWN === "1"` → treat as `down`. (Break-glass; requires a
+   redeploy but needs no network call.)
+2. Read from Redis. **On any error, fail open** — treat as `live`.
+3. If `until` is set and has passed, treat as `live` and lazily clear the key.
+
+Audit log: Redis list `br:ops:log`, `LPUSH` + `LTRIM 0 99`. Every state change appends
+`{ state, reason, until, at }`.
+
+## 2. Dev auth (`lib/dev/auth.ts`)
+
+- Env var `DEV_MODE_SECRET` (long random string).
+- `POST /api/dev/unlock` — body `{ password }`. Compare against `DEV_MODE_SECRET` with
+  `crypto.timingSafeEqual`. **Rate-limit this route using the existing per-IP limiter.**
+  Never accept the secret via query string.
+- On success, set cookie `br_dev`: value `${exp}.${base64url(HMAC_SHA256(exp, secret))}`,
+  `httpOnly`, `secure`, `sameSite: "lax"`, `path: "/"`, 7-day expiry.
+- Export `readDevSession()` — a single verification helper callable from `proxy.ts`,
+  server components, and route handlers. Build it to be reusable; it will also gate the
+  planned `/admin` dashboard.
+- `POST /api/dev/lock` clears the cookie.
+- `/dev` and `/api/dev/*` must be `noindex`, disallowed in `robots.txt`, and excluded
+  from the sitemap.
+
+## 3. `proxy.ts`
+
+Matcher excludes: `_next/static`, `_next/image`, `favicon.ico`, `robots.txt`,
+`sitemap.xml`, the web manifest, app icons, `/ph/` (PostHog proxy), `/api/health`,
+`/api/dev/*`, `/api/cron/*`.
+
+Logic when state is `down`:
+1. Valid `br_dev` cookie → `NextResponse.next()`, plus a `x-dev-bypass: 1` request header
+   so the app can render a "site is down for everyone else" banner.
+2. Path starts with `/api/` **or** `Accept` includes `application/json` → return
+   `503` JSON `{ error: "maintenance", reason, retryAfter }`.
+3. Otherwise → return the maintenance HTML with `503`.
+
+All maintenance responses carry `Retry-After: 900` and `Cache-Control: no-store`.
+
+## 4. Maintenance page (`lib/ops/maintenance-page.ts`)
+
+Export `renderMaintenanceHtml({ reason, until, brand })` returning a complete HTML string.
+
+Hard requirement: **fully self-contained.** Inline CSS, inline SVG, no external fonts, no
+JS, no network requests. It has to render correctly when the rest of the app is broken —
+that is the entire point.
+
+Design: calm and professional, not a joke 404 page. Include the reason text, an ETA when
+`until` is set, a link to Eastside Audubon, and a contact email. Centre a single inline
+SVG bird animation driven by CSS keyframes — a slow, unhurried wingbeat silhouette rather
+than anything bouncy. Wrap the animation in `@media (prefers-reduced-motion: reduce)` and
+hold a static pose when reduced motion is requested.
+
+Read the brand name from one exported constant (e.g. `lib/brand.ts`) — the app is being
+renamed shortly and I don't want the name baked into this file.
+
+Add `app/maintenance/route.ts` that calls the same function and returns `200`, **gated
+behind the dev cookie**, so I can iterate on the design without taking the site down and
+without exposing a public duplicate page.
+
+## 5. Dev panel (`/dev`)
+
+Server component, gated by `readDevSession()`. No cookie → render the password form.
+
+**Site status.** Radio for `live` / `degraded` / `down`, reason textarea, an "auto-lift
+after" select (30m / 2h / 6h / none), and a confirm step before writing. Default the
+auto-lift to 2h — I should have to deliberately opt out of it, not deliberately opt in.
+
+**Recent toggles.** Last 20 entries from `br:ops:log`.
+
+**Debug overlays.** Store these in a second cookie `br_dev_flags` (JSON, readable by
+client components). **Server-side, ignore `br_dev_flags` entirely unless `br_dev` verifies**
+— otherwise anyone can set it.
+- `cacheBypass` → sends `x-dev-nocache: 1`; the cache layer must honour it and skip both
+  tiers.
+- `showDebugBadges` → floating overlay showing, per request: cache tier hit/miss and age,
+  remaining upstream eBird budget, remaining per-IP rate limit, and ORS circuit-breaker
+  state.
+
+**Degraded banner.** When state is `degraded`, render a site-wide banner carrying the
+reason. Do not block the site.
+
+## 6. Cron behaviour
+
+Cron handlers read the ops state first. When `down`, skip **sending** push alerts but
+continue ingest and caching, and still return `200` with `{ skipped: true }` so Vercel
+doesn't record a failed job or retry.
+
+## 7. Service worker audit
+
+This is a PWA, so audit the service worker before finishing. If navigation requests are
+served cache-first from a precached shell, returning visitors will never reach `proxy.ts`
+and will never see maintenance mode. Navigations must be network-first (falling back to
+cache only on genuine network failure), and the SW must not cache `503` responses.
+Report what you find — don't silently rewrite the caching strategy.
+
+## 8. Analytics
+
+When `br_dev` verifies, call `posthog.opt_out_capturing()` by default, with a panel toggle
+to re-enable capture. My own testing must not inflate the usage numbers.
+
+## 9. Constraint — sensitive species
+
+Developer Mode must **not** introduce any path that bypasses the fail-closed sensitive-species
+location chokepoint. Debug output may log `suppressed: true` as a boolean; it must never
+surface protected coordinates, regardless of dev session state.
+
+---
+
+## Deliverable for this round
+
+A plan covering: files added, files modified, new env vars, new Redis keys, the service
+worker findings, and anything in the existing cache or rate-limit layer you'd need to
+touch. Flag any assumption you had to make. I'll review before you write code.

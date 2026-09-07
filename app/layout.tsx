@@ -5,6 +5,7 @@ import './globals.css';
 import 'leaflet/dist/leaflet.css';
 import { PostHogProvider } from './providers';
 import { PostHogPageView } from './PostHogPageView';
+import DevClientProvider from '@/components/dev/DevClientProvider';
 
 // Display font — Space Grotesk (variable font: wght 300-700)
 const spaceGrotesk = Space_Grotesk({
@@ -60,6 +61,11 @@ export default function RootLayout({
             <Suspense fallback={null}>
               <PostHogPageView />
             </Suspense>
+            {/* Renders nothing. Must sit inside PostHogProvider (it opts a dev
+                session out of capture) and above {children} (it has to run on
+                every route, including /dev). Costs an ordinary visitor nothing:
+                with no br_dev_flags cookie it makes no request at all. */}
+            <DevClientProvider />
             {children}
           </PostHogProvider>
         </body>

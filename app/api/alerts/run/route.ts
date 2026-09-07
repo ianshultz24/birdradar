@@ -6,6 +6,7 @@ import { sendPush, isPushConfigured } from '@/lib/push';
 import { findNewLifers, groupKey, MAX_ALERTS_PER_RUN, type AlertSubscription } from '@/lib/alerts';
 import { mergeObservations, fmtDist, type Observation } from '@/lib/ebird';
 import { isPrivateLocation, PRIVATE_LOCATION_LABEL } from '@/lib/location-privacy';
+import { readOpsMode } from '@/lib/ops/state';
 
 export const runtime = 'nodejs';
 export const maxDuration = 60;
@@ -72,6 +73,33 @@ export async function POST(request: NextRequest) {
     return Response.json({ error: 'Alert storage not configured' }, { status: 503 });
   }
 
+  /**
+   * Maintenance behaviour (spec §6).
+   *
+   * When the site is `down` this run still **ingests** — the eBird fetches below
+   * populate the shared cache, so the app is warm rather than cold the moment
+   * the site comes back. What it does not do is *send*.
+   *
+   * Two details make that safe rather than merely quiet:
+   *
+   *   1. **No `br:alerted:` markers are written.** A marker means "this lifer
+   *      has been announced"; writing one for an alert nobody received would
+   *      swallow it permanently. Skipping the write is what makes the outage
+   *      lossless rather than silently destructive.
+   *   2. **It returns 200, not 503.** `.github/workflows/alert-watcher.yml`
+   *      fires every five minutes and fails the job loudly on 401 / warns on
+   *      5xx. A six-hour outage would otherwise produce seventy-two red runs
+   *      and a mailbox full of noise for a situation the operator caused on
+   *      purpose.
+   *
+   * The consequence to know about: because nothing is marked, the first run
+   * after recovery announces everything still inside eBird's `back=7` window
+   * that the subscriber has not seen. That set is bounded by the query window
+   * and `MAX_ALERTS_PER_RUN`, not by how long the site was down — a six-hour
+   * outage and a six-day one produce the same ceiling.
+   */
+  const opsDown = (await readOpsMode()).state === 'down';
+
   const rows = (await db`
     SELECT id, subscription, lat, lng, radius_km, life_codes, use_metric
     FROM alert_subscriptions
@@ -113,6 +141,10 @@ export async function POST(request: NextRequest) {
     const recent = recentRes.ok && Array.isArray(recentRes.data) ? (recentRes.data as Observation[]) : [];
     const notable = notableRes.ok && Array.isArray(notableRes.data) ? (notableRes.data as Observation[]) : [];
     if (recent.length === 0 && notable.length === 0) continue;
+
+    // Ingest is done and the cache is warm. Everything past this point sends
+    // notifications or writes dedupe markers, so during an outage it stops here.
+    if (opsDown) continue;
 
     const observations = mergeObservations(recent, notable);
 
@@ -166,7 +198,17 @@ export async function POST(request: NextRequest) {
   }
 
   return Response.json(
-    { ok: true, subscriptions: subs.length, groups: groups.size, pushed, expired },
+    {
+      ok: true,
+      // `skipped: true` is the contract with the scheduler: the run happened,
+      // it succeeded, and it deliberately sent nothing. Do not turn this into a
+      // non-2xx — see the note above the `opsDown` read.
+      skipped: opsDown,
+      subscriptions: subs.length,
+      groups: groups.size,
+      pushed,
+      expired,
+    },
     { headers: { 'Cache-Control': 'no-store' } }
   );
 }

@@ -73,3 +73,42 @@ export async function rateLimit(
 
   return hits.length > max;
 }
+
+/**
+ * How many requests this IP has left, **without consuming one**.
+ *
+ * Purely additive and read-only — `rateLimit()` above is untouched, and nothing
+ * in the request path calls this. It exists for the Developer Mode debug
+ * overlay, which spec §5 requires to show "remaining per-IP rate limit", and it
+ * is only ever reached after `readDevSession()` has verified.
+ *
+ * The alternative was printing the configured maximum and calling it
+ * "remaining", which is a number that looks like a measurement and is not one —
+ * the exact failure `PhaseE1_fixes.md` §4e names for the odds chip. Returns
+ * `null` when the answer is genuinely unknown, so the overlay can render a
+ * dash rather than invent a figure.
+ */
+export async function peekRateLimit(
+  request: NextRequest,
+  name: string,
+  max: number,
+  windowSec: number
+): Promise<number | null> {
+  const ip = clientIp(request);
+  const limiter = getLimiter(name, max, windowSec);
+
+  if (limiter) {
+    try {
+      const { remaining } = await limiter.getRemaining(ip);
+      return remaining;
+    } catch {
+      // Upstash unreachable — fall through to the per-instance view, which is
+      // the same bucket `rateLimit` would have degraded to anyway.
+    }
+  }
+
+  const windowMs = windowSec * 1000;
+  const now = Date.now();
+  const hits = (memory.get(`${name}:${ip}`) ?? []).filter((t) => now - t < windowMs);
+  return Math.max(0, max - hits.length);
+}

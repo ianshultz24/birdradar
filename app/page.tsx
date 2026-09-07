@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
+import { useState, useEffect, useCallback, useMemo, useRef, useSyncExternalStore } from 'react';
 import dynamic from 'next/dynamic';
 
 import Sidebar from '@/components/Sidebar';
@@ -10,6 +10,16 @@ import HotspotPanel from '@/components/HotspotPanel';
 import NotificationToast, { type ToastItem } from '@/components/NotificationToast';
 import OnboardingModal from '@/components/OnboardingModal';
 import DonationBanner from '@/components/DonationBanner';
+import DegradedBanner from '@/components/dev/DegradedBanner';
+import DebugOverlay from '@/components/dev/DebugOverlay';
+import {
+  subscribeDev,
+  getDevSnapshot,
+  getDevServerSnapshot,
+  devFetchHeaders,
+  recordDebugHeaders,
+  noteIfMaintenance,
+} from '@/lib/dev/client';
 import { XIcon } from '@/components/Icons';
 import { getTheme } from '@/lib/theme';
 import { hasSeenOnboarding, markOnboardingSeen } from '@/lib/onboarding';
@@ -158,6 +168,36 @@ export default function Home() {
   const isMobile = useMobile();
   const prefersReducedMotion = usePrefersReducedMotion();
   const [drawerOpen, setDrawerOpen] = useState(false);
+
+  /**
+   * Developer Mode / ops state.
+   *
+   * External store rather than page state, for the same reason
+   * `getDriveTimeConfigured` is one (`lib/drive-time.ts`, consumed at
+   * `components/AlertsPanel.tsx:136`): it is fetched imperatively, shared by
+   * unrelated components, and must not become a prop threaded through here.
+   *
+   * `getDevServerSnapshot` returns a stable "not asked yet" value, so SSR and
+   * the hydration pass agree and this cannot introduce the second hydration
+   * warning `PhaseE1_rationale.md` §2.1 was careful to avoid.
+   */
+  const dev = useSyncExternalStore(subscribeDev, getDevSnapshot, getDevServerSnapshot);
+  const [degradedDismissed, setDegradedDismissed] = useState(false);
+
+  const opsState = dev.ops?.state ?? 'live';
+  /** Everyone sees this; it blocks nothing. */
+  const degradedNotice = opsState === 'degraded' && !degradedDismissed;
+  /**
+   * "The site is down for everyone else."
+   *
+   * Gated on the **server-validated** session, never on the fact that the app
+   * rendered at all. A non-dev tab that was already open when the switch was
+   * flipped is also still looking at the app — telling *them* the site is down
+   * for everyone but them would be false, and false at the worst moment.
+   * (That tab reloads itself once instead, and lands on the real 503.)
+   */
+  const bypassNotice = opsState === 'down' && dev.session === 'active';
+  const devBannerOpen = degradedNotice || bypassNotice;
 
   /** Low battery mode — user setting, or forced on by the OS reduced-motion preference */
   const lowFi = settings.lowBatteryMode || prefersReducedMotion;
@@ -388,6 +428,12 @@ export default function Home() {
   useEffect(() => {
     if (donationSettledRef.current || donationOpen) return;
     if (onboardingOpen || locationNotice || !locationResolved) return;
+    // Fifth suppression, same family as `locationNotice`. The degraded / bypass
+    // banner occupies `top: 52` in the map column, which is exactly where
+    // DonationBanner goes on mobile — and asking for money underneath a notice
+    // saying the app is not working properly is the same bad moment
+    // `PhaseE2_rationale.md` §5.1 identified for the location notice.
+    if (devBannerOpen) return;
     if (
       !shouldShowDonationPrompt({
         sessionCount: sessionCountRef.current,
@@ -403,7 +449,7 @@ export default function Home() {
       session_count: sessionCountRef.current,
       view_actions: viewActions,
     });
-  }, [viewActions, locationResolved, onboardingOpen, locationNotice, donationOpen]);
+  }, [viewActions, locationResolved, onboardingOpen, locationNotice, donationOpen, devBannerOpen]);
 
   // Keep the push-alert subscription's life-list snapshot current while the app
   // is open. No-ops unless the user has enabled background alerts.
@@ -480,14 +526,31 @@ export default function Home() {
     setApiStatus('loading');
 
     try {
+      // Empty for everyone who is not a verified developer with the cache-bypass
+      // flag on. The header is meaningless server-side without a valid `br_dev`
+      // cookie, so a forged one achieves nothing — see `proxyEbird`.
+      const devHeaders = devFetchHeaders();
+      const init = { signal: controller.signal, headers: devHeaders };
+
       const [recentRes, notableRes, hotspotsRes] = await Promise.all([
-        fetch(`/api/ebird/recent?lat=${lat}&lng=${lng}&dist=${distKm}`, { signal: controller.signal }),
-        fetch(`/api/ebird/notable?lat=${lat}&lng=${lng}&dist=${distKm}`, { signal: controller.signal }),
-        fetch(`/api/ebird/hotspots?lat=${lat}&lng=${lng}&dist=${distKm}`, { signal: controller.signal }),
+        fetch(`/api/ebird/recent?lat=${lat}&lng=${lng}&dist=${distKm}`, init),
+        fetch(`/api/ebird/notable?lat=${lat}&lng=${lng}&dist=${distKm}`, init),
+        fetch(`/api/ebird/hotspots?lat=${lat}&lng=${lng}&dist=${distKm}`, init),
       ]);
 
       // A newer fetchData started while this was in-flight — discard silently
       if (gen !== fetchGenerationRef.current) return;
+
+      // The debug overlay's per-request numbers ride back on these responses.
+      // No-op unless the session verified server-side.
+      recordDebugHeaders(recentRes);
+
+      // The primary maintenance signal, and the reason the /api/health poll can
+      // afford to be five-minutely: an active client is already talking to the
+      // API constantly, and proxy.ts answers every one of those with a 503
+      // carrying the reason. Learning it from traffic that is happening anyway
+      // is both free and immediate.
+      if (await noteIfMaintenance(recentRes)) return;
 
       if (!recentRes.ok || !notableRes.ok) {
         throw new Error('eBird API error');
@@ -1189,6 +1252,23 @@ export default function Home() {
           />
         )}
 
+        {/* Ops notice. Top of the map column at `top: 52`, clearing the
+            StatusBar chip at `top: 12` — deliberately NOT the bottom-centre
+            band, which the location notice owns (PhaseE2_rationale.md §5.1).
+            It shares its slot with DonationBanner's mobile placement, which is
+            why the donation effect above suppresses against it. */}
+        {devBannerOpen && (
+          <DegradedBanner
+            variant={bypassNotice ? 'bypass' : 'degraded'}
+            reason={dev.ops?.reason ?? ''}
+            lightMode={lm}
+            isMobile={isMobile}
+            lowFi={lowFi}
+            rightPanelOpen={selectedLocKey !== null || hotspotPanel !== null}
+            onDismiss={() => setDegradedDismissed(true)}
+          />
+        )}
+
         {/* Inside the map column, not at page level, so "centred" means centred
             over the map rather than over the map plus the 380 px sidebar. The
             column is the `position: relative` containing block above. */}
@@ -1273,6 +1353,13 @@ export default function Home() {
           onClose={handleCloseOnboarding}
         />
       )}
+
+      {/* Renders null unless the session verified server-side AND the
+          showDebugBadges flag is on. Mounted here rather than in the layout
+          because it needs the user's theme, which lives in this component's
+          settings state. `position: fixed` at page level, so it is deliberately
+          outside the map column. */}
+      <DebugOverlay lightMode={lm} />
     </div>
   );
 }
