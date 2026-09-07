@@ -290,6 +290,35 @@ Each of these is a plausible-looking change that would be wrong.
 - **`lib/brand.ts` reaches only the maintenance page and `/dev`.** The ~20 other
   literals keep theirs; the rename gets its own commit. `public/sw.js` could not
   import it anyway.
+- **`html, body { overflow: hidden }` was not relaxed for `/dev`.** See §5.2 —
+  this was reported as a bug and fixed the other way round.
+
+### 5.2 The `/dev` page could not scroll — fixed inside the route, not the layout
+
+Reported after the first pass: *"I can't actually scroll on the /dev page even
+though I can see there's stuff lower on the page."*
+
+The document is pinned by **two** independent sources saying the same thing:
+`app/globals.css:9-18` (`html, body { height: 100%; overflow: hidden }`) and the
+`h-full overflow-hidden` classes on `<body>` at `app/layout.tsx:59`. The panel
+shell used `minHeight: 100vh`, which inside an `overflow: hidden` body is not
+scrollable — it is simply clipped. Measured after the fix: content is 1491 px
+against a 771 px viewport, i.e. 720 px was unreachable.
+
+**The tempting fix is to relax the body rule, and it would be wrong.** That rule
+is what makes the product surface work: `app/page.tsx` is a fixed `100vh` flex
+shell whose sidebar and panels scroll internally, and `MapControls`,
+`MapLegend`, the banners, the mobile drawer and both bottom sheets are all
+positioned against the viewport. A scrollable body would give the map a
+scrollbar and detach every one of those — a real regression on the main screen,
+traded for a scrollbar on an operator tool.
+
+So the fix is scoped entirely to the route: an outer element with a definite
+`height: 100%` and `overflowY: auto` becomes its own scroll container, with an
+inner `minHeight: 100%` + `boxSizing: border-box` wrapper so the short unlock
+form still centres while the long panel grows and scrolls. Verified: 720 px of
+scroll range, reaches the bottom, returns to top, and the `Session` section at
+the foot of the page is reachable.
 
 ### 5.1 One deviation from the approved plan, stated plainly
 
@@ -479,6 +508,18 @@ wrong.
     Actions logs a failure every five minutes for the length of every outage.
 13. **`/` must stay static.** Check the build output. If it becomes `ƒ`,
     something started reading cookies or headers on the render path.
-14. **`reportCount` is still always 1**, so "Reported N× this week here" remains
+14. **Any full-page route under `app/` must bring its own scroll container.**
+    `html, body { overflow: hidden }` comes from two places (§5.2) and is
+    load-bearing for the map. `minHeight: 100vh` on a page does not scroll — it
+    clips. `/dev` shows the pattern: outer `height: 100%` + `overflowY: auto`,
+    inner `minHeight: 100%` + `boxSizing: border-box`.
+15. **Local dev and production share one Upstash instance** if the same
+    credentials are in both `.env.local` and Vercel. `br:ops:mode` is a shared
+    key, so **a `down` toggle from localhost takes deployed traffic down too**
+    once this ships. That is not hypothetical — `phaseB_rationale.md` §6 already
+    records the eBird upstream budget being shared the same way. Either use a
+    separate Upstash database for local development, or treat `/dev` on
+    localhost as a live production control.
+16. **`reportCount` is still always 1**, so "Reported N× this week here" remains
     dead code. Pre-existing, out of scope, unchanged — same note as Phases B
     through E3.

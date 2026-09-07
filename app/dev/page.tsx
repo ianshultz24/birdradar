@@ -64,20 +64,56 @@ export default async function DevPage() {
   const jar = await cookies();
   const t = getTheme(LIGHT_MODE);
 
+  /**
+   * ─── This page owns its own scroll container, and has to ────────────────────
+   *
+   * The root layout pins the document: `html, body { height: 100%; overflow:
+   * hidden }` at `app/globals.css:9-18`, restated as `h-full overflow-hidden`
+   * on `<body>` at `app/layout.tsx:59`. Two sources, same rule.
+   *
+   * That is load-bearing for the product surface and must not be relaxed here.
+   * `app/page.tsx` is a fixed `100vh` flex shell whose sidebar and panels scroll
+   * internally, `MapControls` / `MapLegend` / the banners are positioned against
+   * the viewport, and the mobile drawer and bottom sheets sit at `bottom: 56`
+   * against it. A scrollable body would give the map a scrollbar and detach all
+   * of that.
+   *
+   * So a `minHeight: 100vh` block here does not scroll — it just gets clipped by
+   * the body, which is exactly the bug this replaced. The fix is scoped
+   * entirely to this route: an outer element with a definite height and
+   * `overflowY: auto` becomes its own scroll container, and touches nothing the
+   * app depends on.
+   *
+   * **Any future full-page route added under `app/` inherits the same
+   * constraint** and needs the same treatment.
+   */
   const shell = (children: React.ReactNode, centre = false) => (
     <div
       style={{
-        minHeight: '100vh',
+        height: '100%',
+        overflowY: 'auto',
         background: t.bg0,
         color: t.fg1,
         fontFamily: t.sans,
-        padding: centre ? 24 : '32px 24px 64px',
-        display: centre ? 'flex' : 'block',
-        alignItems: centre ? 'center' : undefined,
-        justifyContent: centre ? 'center' : undefined,
       }}
     >
-      {children}
+      <div
+        style={{
+          // `minHeight`, not `height`: short content (the unlock form) still
+          // fills the viewport so it can be centred, while long content (the
+          // panel) grows past the fold and scrolls rather than being clipped.
+          minHeight: '100%',
+          // Without this, the padding is added *outside* the 100% and the page
+          // scrolls by exactly the padding even when the content fits.
+          boxSizing: 'border-box',
+          padding: centre ? 24 : '32px 24px 64px',
+          display: centre ? 'flex' : 'block',
+          alignItems: centre ? 'center' : undefined,
+          justifyContent: centre ? 'center' : undefined,
+        }}
+      >
+        {children}
+      </div>
     </div>
   );
 
